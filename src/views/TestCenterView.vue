@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { useRecordingStore } from '@/stores/recording'
 import { useUnitsStore } from '@/stores/units'
 import { useUserStore } from '@/stores/user'
-import { useArchiveConsent } from '@/composables/useArchiveConsent'
+import { useArchiveConsent, confirmArchiveConsent } from '@/composables/useArchiveConsent'
 import { useSpeechDemo } from '@/composables/useSpeechDemo'
 import { usePageCopy } from '@/composables/usePageCopy'
 import { CORE_UNIT_IDS } from '@/data/coreUnits'
@@ -30,6 +30,8 @@ const countdown = ref(0)
 const unit = ref<any>(null)
 const micError = ref<string | null>(null)
 const saveError = ref<string | null>(null)
+/** 接口成功但没带回分析结果（第 8 周 D：这类情况不能跳到空白结果页） */
+const noResultError = ref<string | null>(null)
 
 const verifiedTasks = computed(() =>
   unitsStore.coreUnits.filter(u => u.verified && CORE_UNIT_IDS.includes(u.id as any))
@@ -50,11 +52,12 @@ const loadState = computed<'loading' | 'error' | 'empty' | 'unopened' | null>(()
 /** 分析阶段状态：正在分析 → loading；分析或落库失败 → error（原始错误进 detail） */
 const analysisState = computed<'loading' | 'error' | null>(() => {
   if (recordingStore.isAnalyzing) return 'loading'
-  if (recordingStore.error || saveError.value) return 'error'
+  if (recordingStore.error || saveError.value || noResultError.value) return 'error'
   return null
 })
 
 const analysisDetail = computed(() => {
+  if (noResultError.value) return noResultError.value
   if (saveError.value) return `本轮结果未能保存到学习记录：${saveError.value}`
   return recordingStore.error || undefined
 })
@@ -77,6 +80,7 @@ function handleLoadAction() {
 /** 分析失败后的主按钮：清掉本轮错误，回到「重录 → 再提交」 */
 function retryAnalysis() {
   saveError.value = null
+  noResultError.value = null
   recordingStore.clearError()
 }
 
@@ -119,6 +123,7 @@ async function startTest() {
 async function submit() {
   await recordingStore.stopRecording() // 等录音 Blob 就绪，避免竞态取到空录音
   saveError.value = null
+  noResultError.value = null
   try {
     await recordingStore.analyzeRecording(unitId.value)
   } catch (e: any) {
@@ -132,7 +137,18 @@ async function submit() {
     return
   }
   const a = recordingStore.assessment
-  if (consented.value && a?.evaluable) {
+  // 接口 200 但没带 data（或 data 被解析成空）时以前会直接跳到结果页，结果页拿不到结论、
+  // 只能显示「上次练习结果 / 还没有录音结果」，看起来像分析没做完（第 8 周 D 修复）。
+  // 这里就地拦下：说明原因、留在本页重录，绝不跳到空白结果页。
+  if (!a) {
+    noResultError.value = '分析没有返回结果（可能是录音太短或上传失败），请重录一次'
+    ElMessage.error(noResultError.value)
+    return
+  }
+  // 存档必须家长同意（第 7 周 D）：三次保存入口（关卡页 / 历史单元 / 检测中心）统一问一次，
+  // 选「这次不保存」就只在结果页展示。分析结果在内存里，不影响 P09 的图表与四步反馈。
+  // 不可评价的录音不写档案：不把"录音不合格"记成一次 0 分练习。
+  if (a.evaluable && await confirmArchiveConsent()) {
     try {
       await userStore.addLearningRecord({
         unitId: unitId.value,
@@ -152,6 +168,8 @@ async function submit() {
       saveError.value = e?.message || String(e)
       ElMessage.error(`分析结果仍会显示，但这次练习没能存进档案：${saveError.value}`)
     }
+  } else if (a.evaluable) {
+    ElMessage.info('这次结果没有存进档案；同意保存后，下一次练习才会记录。')
   }
   router.push(`/feedback/${unitId.value}`)
 }

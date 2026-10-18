@@ -82,6 +82,12 @@ function handleMenuClick(path: string) {
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <el-tooltip
+            content="闯关不需要登录，也不会收集账号信息；只有家长同意后，练习结果才会保存到本机档案，可随时撤回并删除。"
+            placement="bottom"
+          >
+            <el-tag size="small" type="info" effect="plain" class="guest-tag">免登录 · 访客</el-tag>
+          </el-tooltip>
           <el-button type="primary" :icon="'Search'" @click="router.push('/search')">搜索</el-button>
           <el-button :icon="'Microphone'" @click="router.push('/test?unit=ma')">快速测试</el-button>
         </div>
@@ -112,7 +118,8 @@ function handleMenuClick(path: string) {
 .top-header { background: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 4px rgba(0,0,0,0.08); z-index: 10; flex-wrap: wrap; gap: 12px; }
 .header-left h2 { margin: 0 0 4px; font-size: 18px; color: #303133; }
 .page-code { margin-left: 6px; font-size: 11px; font-weight: 400; color: #909399; background: #f2f3f5; border-radius: 4px; padding: 1px 6px; vertical-align: middle; }
-.header-right { display: flex; gap: 8px; flex-wrap: wrap; }
+.header-right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.guest-tag { font-weight: 400; }
 .page-content { flex: 1; overflow-y: auto; padding: 16px; }
 @media (max-width: 768px) {
   .mobile-toggle { display: block; }

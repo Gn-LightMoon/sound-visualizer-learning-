@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { audioAnalysisApi } from '@/api'
-import type { RecordingState, AudioAnalysisResult, PronunciationAssessment, FeedbackItem } from '@/types'
+import type { RecordingState, AudioAnalysisResult, PronunciationAssessment, FeedbackItem, RecordingQuality } from '@/types'
 
 function mapFeedback(raw: any[]): FeedbackItem[] {
   return (raw || []).map(f => ({
@@ -18,29 +18,68 @@ function mapFeedback(raw: any[]): FeedbackItem[] {
 }
 
 /**
- * 「有声 / 无声」掩码的兼容解析（第 6 周 D 修复）
+ * 「有声 / 无声」掩码的兼容解析（第 6 周 D 起，第 8 周 D 修正）
  * ---------------------------------------------------------------------------
  * 背景：结果页的声调曲线要用 voiced_flag 把无声段断开（null），
  * 但后端 /api/audio/analyze 返回的字段名历史上拼成了 `voiecd_flag`（多一个 c），
  * 而且该字段一直是空数组、从未填充 —— 等于这条优化是死代码。
- * 这里按三种来源依次兜底，保证「有声断线」一定能生效：
+ * 这里按两种来源依次兜底：
  *   1) voiced_flag      —— 约定的正式字段名
  *   2) voiecd_flag      —— 后端现存拼写（待 A/B 改名，改名后本兜底自动失效）
- *   3) voiced_probs≥0.5 —— 由后端已填充的概率派生
- * 三者都没有时返回 []，结果页会回落到「f0 > 0 判定」，不会报错。
+ *
+ * ⚠ 第 8 周实测修正：**不能**用 voiced_probs ≥ 0.5 派生掩码。
+ *   实测（audio/tts_raw/L30_ma1.wav）后端返回的 voiced_probs 只有 0.00–0.21，
+ *   连明显有声的帧也远低于 0.5 —— 按 0.5 派生会把整条曲线全部屏蔽成 null，
+ *   结果页的声调图会空掉（比不屏蔽更糟）。而 f0 本身在无声帧上就是 0，
+ *   所以没有布尔掩码时回落到「f0 > 0」判定即可（见 FeedbackView 的 maskByVoiced）。
+ *   待 A/B 把 voiced_flag 真正填好（或修正 voiced_probs 的标定）后再启用概率口径。
  */
 function resolveVoicedFlag(raw: any): boolean[] {
   const direct = raw?.voiced_flag
   if (Array.isArray(direct) && direct.length) return direct as boolean[]
   const legacy = raw?.voiecd_flag
   if (Array.isArray(legacy) && legacy.length) return legacy as boolean[]
-  const probs = raw?.voiced_probs
-  if (Array.isArray(probs) && probs.length) return probs.map((p: number) => Number(p) >= 0.5)
   return []
 }
 
-function mapAssessment(data: any): PronunciationAssessment {
-  const audioRaw = data.audio_analysis
+/**
+ * 录音质量项的字段兼容（第 8 周 D 修复）
+ * ---------------------------------------------------------------------------
+ * 后端 /api/audio/analyze 的质量项实际返回 `{ name: '音量', key: 'volume', status: 'pass', message }`，
+ * 而前端 QualityItem 约定的是 `{ label, status: 'ok' | 'warn' | 'fail' }`。两边口径不一致的后果：
+ *   - 结果页 P09 的「录音质量」列表标题永远是空的（渲染成「 — 音量适中（-27dBFS）」）；
+ *   - status='pass' 对不上 ok/warn/fail，样式分支失效。
+ * 这里在前端统一成前端口径；key → 中文兜底，即使后端不再返回 name 也不会出现空标题。
+ */
+const QUALITY_KEY_LABELS: Record<string, string> = {
+  volume: '音量',
+  noise: '环境噪声',
+  clipping: '截幅',
+  duration: '时长',
+  silence: '静音比',
+}
+
+function mapQuality(raw: any): RecordingQuality {
+  const items = Array.isArray(raw?.items)
+    ? raw.items.map((it: any) => {
+        const key = String(it?.key ?? '')
+        const status = it?.status === 'fail' ? 'fail' : it?.status === 'pass' || it?.status === 'ok' ? 'ok' : 'warn'
+        return {
+          key,
+          label: String(it?.label || it?.name || QUALITY_KEY_LABELS[key] || key || '检查项'),
+          status,
+          message: String(it?.message ?? ''),
+        }
+      })
+    : []
+  return {
+    passed: raw?.passed !== false,
+    summary: String(raw?.summary ?? ''),
+    items,
+  }
+}
+
+function mapAssessment(data: any): PronunciationAssessment {  const audioRaw = data.audio_analysis
   const audioAnalysis: AudioAnalysisResult | null = audioRaw
     ? {
         f0: audioRaw.f0 || [],
@@ -79,7 +118,7 @@ function mapAssessment(data: any): PronunciationAssessment {
     feedback,
     audioAnalysis,
     evaluable: data.evaluable !== false && (data.quality?.passed !== false),
-    quality: data.quality || { passed: true, summary: '', items: [] },
+    quality: mapQuality(data.quality),
     reliability: data.reliability || 'not_available',
     reliabilityNote: data.reliability_note || '',
     boundary: data.boundary || {

@@ -12,6 +12,7 @@ import { ElMessage } from 'element-plus'
 import { useRecordingStore } from '@/stores/recording'
 import { useUserStore } from '@/stores/user'
 import { useDemoPlayer } from '@/composables/useDemoPlayer'
+import { confirmArchiveConsent } from '@/composables/useArchiveConsent'
 import { getUnitMeta, isVerifiedUnit, getVerifiedUnitMeta } from '@/data/pinyinUnits'
 
 const props = defineProps<{ unitId: string }>()
@@ -128,6 +129,18 @@ async function analyzeAndGoFeedback() {
   stopRecording()
   await recordingStore.analyzeRecording(unitId.value)
   const assessment = recordingStore.assessment
+  // 存档必须家长同意（第 7 周 D）：不同意就只在结果页展示，不写数据库
+  // 不可评价的录音不写档案：不把"录音不合格"记成一次 0 分练习
+  if (assessment && !assessment.evaluable) {
+    ElMessage.info('这次录音无法可靠评价，结果不会存进档案（不记 0 分）。')
+    router.push(`/feedback/${unitId.value}`)
+    return
+  }
+  if (!(await confirmArchiveConsent())) {
+    ElMessage.info('这次结果没有存进档案；同意保存后，下一次练习才会记录。')
+    router.push(`/feedback/${unitId.value}`)
+    return
+  }
   try {
     await userStore.addLearningRecord({
       unitId: unitId.value,

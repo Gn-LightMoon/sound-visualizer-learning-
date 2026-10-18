@@ -7,6 +7,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
 import { getUnitMeta } from '@/data/pinyinUnits'
+import { maskByVoiced, smoothSeries } from '@/utils/toneCurve'
 import PageFeedback from '@/components/PageFeedback.vue'
 import PageState from '@/components/PageState.vue'
 import { usePageCopy } from '@/composables/usePageCopy'
@@ -644,7 +645,12 @@ function initThreeScene() {
 }
 
 // 声调曲线对比图（标准曲线由后端生成）
-//改动1 -- > 使用voiced_flag决定是否保留f0：有声保留，无声设为null断线
+// 改动1 -- > 使用voiced_flag决定是否保留f0：有声保留，无声设为null断线
+// 第 8 周 D（体验打磨）：叠加 E 的 src/utils/toneCurve.ts 前两步——屏蔽静音、段内平滑。
+//   F0 提取本身有抖动，直接画会呈锯齿；平滑只在连续有声段内做，遇到静音（null）就断开，
+//   不跨静音段平均，避免把字与字之间的空白算进来。
+//   注意：E 的第 3 步「T 值（0–5）归一化」尚未采用——它需要和 A 确认标准曲线的调域口径，
+//   用错调域会把「说得低」误判成「说错了」；等 A/E 定稿后再在 P09 切换。
 function initToneChart() {
   if (!toneChartRef.value) return
   const existing = echarts.getInstanceByDom(toneChartRef.value)
@@ -655,43 +661,39 @@ function initToneChart() {
   const voiced: (boolean | undefined)[] = assessment.value?.audioAnalysis?.voiced_flag || []
   const voicedProbs: number[] = assessment.value?.audioAnalysis?.voiced_probs || []
 
-  // 用 voiced_flag 掩码：unvoiced -> null（ECharts 遇到 null 会断线）
-  const userF0 = rawF0.map((v, i) => {
-    const vf = voiced[i]
-    if (typeof vf === 'boolean') {
-      return vf ? v : null
-    }
-    // 回退：若没有 voiced_flag 字段，则以 f0>0 判定（保持向后兼容）
-    return (typeof v === 'number' && v > 0) ? v : null
-  })
+  // 用 voiced_flag 掩码：unvoiced -> null（ECharts 遇到 null 会断线），再做段内平滑
+  const voicedMask = voiced.length ? (voiced as boolean[]) : undefined
+  const userF0 = smoothSeries(maskByVoiced(rawF0, voicedMask), 2)
 
-  // 标准曲线：优先后端提供的 standardF0，否则按识别声调生成兜底并确保与 rawF0 等长
-  let standardF0: number[] = assessment.value?.audioAnalysis?.standardF0 || []
-  if ((!standardF0 || standardF0.length === 0) && rawF0.length > 0) {
-    const tone = assessment.value?.audioAnalysis?.detectedTone || 1
-    standardF0 = rawF0.map((_, i) => {
-      const t = i / rawF0.length
-      if (tone === 2) return 120 + t * 80
-      if (tone === 3) return 150 - t * 40 + (t > 0.5 ? (t - 0.5) * 120 : 0)
-      if (tone === 4) return 220 - t * 80
-      return 200 + Math.sin(t * Math.PI) * 5
-    })
-  }
+  // 标准曲线：只画后端真实返回的 standardF0（第 8 周 D 修复假数据）
+  // ---------------------------------------------------------------------------
+  // 这里原来有个兜底：后端没给 standard_f0 时，按 detectedTone 用公式（120+t*80 之类）
+  // 临时造一条「标准发音」曲线。那不是任何真实录音，属于排期禁止的「假分 / 假曲线」，
+  // 而且一旦 30 关正式发布（后端 UNIT_REFERENCE 里还没有 L02 这些新 id，就不会返回
+  // standard_f0），这条假曲线会被当成真实标准线展示。现在：没有就不画，并如实说明。
+  const standardRaw: number[] = assessment.value?.audioAnalysis?.standardF0 || []
+  const hasStandard = standardRaw.length > 0
 
-  // 若 standardF0 长度与 rawF0 不一致，简单重采样到 rawF0.length（保证对齐）
-  if (standardF0.length !== rawF0.length) {
-    const n = Math.max(1, rawF0.length || standardF0.length)
-    const src = standardF0.length ? standardF0 : new Array(n).fill(null)
-    standardF0 = new Array(n).fill(null).map((_, i) => {
-      const idx = Math.floor(i / n * src.length)
-      return src[idx] ?? null
-    })
-  }
+  // 后端标准曲线与本次 F0 帧数可能不一致，按帧索引对齐到 rawF0.length（保证同一时间轴）
+  const standardF0: (number | null)[] = hasStandard
+    ? rawF0.map((_, i) => {
+        const idx = Math.min(
+          standardRaw.length - 1,
+          Math.floor((i / Math.max(1, rawF0.length)) * standardRaw.length),
+        )
+        const v = standardRaw[idx]
+        return typeof v === 'number' && v > 0 ? v : null
+      })
+    : []
 
   const labels = rawF0.map((_, i) => i)
 
   chart.setOption({
-    title: { text: '声调曲线对比', left: 'center', textStyle: { fontSize: 14 } },
+    title: {
+      text: hasStandard ? '声调曲线对比' : '声调曲线（本次未返回标准曲线）',
+      left: 'center',
+      textStyle: { fontSize: 14 },
+    },
     tooltip: {
       trigger: 'axis',
       // tooltip 显示：频率 + 是否有声 + voiced_prob（若有）
@@ -700,14 +702,18 @@ function initToneChart() {
         const p = Array.isArray(params) ? params[0] : params
         const idx = p?.dataIndex ?? 0
         const val = p?.data ?? null
-        const isVoiced = voiced[idx]
+        // 有声/无声：后端填了 voiced_flag 就用它，否则按原始 f0>0 判定（第 8 周 D 修正）
+        const rawVal = rawF0[idx]
+        const isVoiced = typeof voiced[idx] === 'boolean'
+          ? (voiced[idx] as boolean)
+          : (typeof rawVal === 'number' && rawVal > 0)
         const prob = voicedProbs[idx]
-        const voicedTxt = typeof isVoiced === 'boolean' ? (isVoiced ? '有声' : '无声') : ''
+        const voicedTxt = isVoiced ? '有声' : '无声'
         const probTxt = (typeof prob === 'number') ? `<br/>voiced_prob: ${prob.toFixed(2)}` : ''
         return `时间: ${idx}<br/>频率: ${val === null ? '—' : (val.toFixed ? val.toFixed(1) + ' Hz' : val)}<br/>${voicedTxt}${probTxt}`
       }
     },
-    legend: { data: ['您的发音', '标准发音'], bottom: 0 },
+    legend: hasStandard ? { data: ['您的发音', '标准发音'], bottom: 0 } : { show: false },
     xAxis: { type: 'category', data: labels, name: '时间' },
     yAxis: { type: 'value', name: '频率 (Hz)' },
     series: [
@@ -723,15 +729,18 @@ function initToneChart() {
         symbolSize: 6,
         // 通过 emphasis 或 tooltip 显示 voiced_prob（已经在 tooltip formatter 中处理）
       },
-      {
-        name: '标准发音',
-        type: 'line',
-        data: standardF0,
-        smooth: true,
-        lineStyle: { color: '#67c23a', width: 3, type: 'dashed' },
-        itemStyle: { color: '#67c23a' },
-        symbol: 'none',
-      },
+      ...(hasStandard
+        ? [{
+            name: '标准发音',
+            type: 'line' as const,
+            data: standardF0,
+            smooth: true,
+            connectNulls: false,
+            lineStyle: { color: '#67c23a', width: 3, type: 'dashed' as const },
+            itemStyle: { color: '#67c23a' },
+            symbol: 'none',
+          }]
+        : []),
     ],
     grid: { left: 60, right: 30, top: 40, bottom: 40 },
   })
@@ -1182,6 +1191,9 @@ watch(
 .reliability-note { font-size: 13px; color: #606266; margin-top: 8px; }
 .quality-list { margin-top: 16px; }
 .quality-item { font-size: 13px; padding: 6px 0; }
+/* 后端质量项状态是 pass / warn / fail，映射到 ok / warn / fail 后按状态上色（第 8 周 D） */
+.quality-item.ok { color: #606266; }
+.quality-item.warn { color: #e6a23c; }
 .quality-item.fail { color: #f56c6c; }
 .four-step h3 { margin: 0 0 12px; }
 .step-item { padding: 12px; margin-bottom: 8px; border-radius: 8px; background: #f5f7fa; font-size: 13px; }

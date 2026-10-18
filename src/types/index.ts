@@ -156,7 +156,12 @@ export interface CmsUnit {
   mistakes: Array<Record<string, string>>
   steps: Array<Record<string, string>>
   related: string[]
-  status: 'draft' | 'published'
+  /**
+   * CMS 审核状态（C 的第 6 周四状态机）：draft 草稿 / pending_review 待审核 /
+   * rejected 已驳回 / published 已发布。
+   * 大众端只认 published（见 src/stores/levels.ts 的 buildView），其余一律按「未开放」处理。
+   */
+  status: 'draft' | 'pending_review' | 'rejected' | 'published'
   verified: boolean
   order: number
   /**

@@ -19,6 +19,7 @@ import { ElMessage } from 'element-plus'
 import { useLevelsStore } from '@/stores/levels'
 import { useRecordingStore } from '@/stores/recording'
 import { useUserStore } from '@/stores/user'
+import { useArchiveConsent, confirmArchiveConsent } from '@/composables/useArchiveConsent'
 import { useDemoPlayer } from '@/composables/useDemoPlayer'
 import { usePageCopy } from '@/composables/usePageCopy'
 import PageState from '@/components/PageState.vue'
@@ -30,6 +31,8 @@ const router = useRouter()
 const levelsStore = useLevelsStore()
 const recordingStore = useRecordingStore()
 const userStore = useUserStore()
+/** 家长同意存档（第 7 周 D）：不登录也能闯关，但录音默认不留存 */
+const { consented } = useArchiveConsent()
 /**
  * 示范音播放（第 5 周 D 交付：关卡页至少一关示范可播放）
  *   有 CMS 正式示范音 unit.demoAudio → 播真实音频；
@@ -70,6 +73,22 @@ function availabilityText(l: { availability: string }): string {
   if (l.availability === 'learn_only') return '只学习，暂不检测'
   return '未开放'
 }
+
+/**
+ * 「录音检测」卡片的说明文案（第 8 周 D 修复）
+ * ---------------------------------------------------------------------------
+ * 原来这里一律用 copy.unopened（「这一关还没开放」），但只学不测的关其实是**已发布**的，
+ * 上面已经有一条「只学习、不检测」的提示，卡片里再说「还没开放」就自相矛盾，
+ * 会被验收当成文案错误。这里按三态分别给话术。
+ */
+const detectionHint = computed(() =>
+  level.value?.availability === 'learn_only'
+    ? '这一关只学不测：评分还不能稳定复现，所以不开放检测、不会给出分数。跟着示范把音读稳就好。'
+    : copy.unopened,
+)
+
+/** 未开放的关不渲染示范入口与教学卡片：内容还没过审，不拿占位内容充数（第 8 周 D） */
+const showLevelBody = computed(() => level.value?.availability !== 'unopened')
 
 function availabilityTag(l: { availability: string }): 'success' | 'warning' | 'info' {
   if (l.availability === 'open') return 'success'
@@ -149,6 +168,20 @@ async function analyzeAndGoFeedback() {
     ElMessage.error(recordingStore.error || '分析没有返回结果，请重录一次')
     return
   }
+  // 存档必须家长同意（第 7 周 D）：未同意时弹一次确认，选「这次不保存」就不落库，
+  // 但分析结果照常带进结果页展示（P09 从内存读，不依赖数据库）。
+  // 不可评价的录音同样不写档案：不把"录音不合格"记成一次 0 分练习。
+  if (!assessment.evaluable) {
+    ElMessage.info('这次录音无法可靠评价，结果不会存进档案（不记 0 分）。')
+    router.push(`/feedback/${activeUnitId.value}`)
+    return
+  }
+  const allowed = await confirmArchiveConsent()
+  if (!allowed) {
+    ElMessage.info('这次结果没有存进档案；同意保存后，下一次练习才会记录。')
+    router.push(`/feedback/${activeUnitId.value}`)
+    return
+  }
   try {
     await userStore.addLearningRecord({
       unitId: activeUnitId.value,
@@ -220,16 +253,22 @@ async function analyzeAndGoFeedback() {
           <p class="level-hint">{{ level.childHint }}</p>
         </div>
         <div class="level-actions">
-          <el-button type="primary" :icon="'VideoPlay'" :loading="isDemoPlaying" @click="playDemo">
-            听示范
-          </el-button>
-          <el-button :icon="'VideoPause'" @click="playSlow">慢速</el-button>
+          <template v-if="showLevelBody">
+            <el-button type="primary" :icon="'VideoPlay'" :loading="isDemoPlaying" @click="playDemo">
+              听示范
+            </el-button>
+            <el-button :icon="'VideoPause'" @click="playSlow">慢速</el-button>
+          </template>
+          <!-- 未开放：不给示范入口（内容未过审），只留状态说明与回列表 -->
+          <span v-else class="level-actions-note">内容通过审核后开放示范与练习</span>
         </div>
       </div>
 
       <!-- 示范音来源如实标注：有正式授权示范音就说明，没有就明说这是合成示意，不冒充 -->
-      <p v-if="demoIsSynthetic" class="disclaimer demo-source">{{ ttsDisclaimer }}</p>
-      <p v-else class="disclaimer demo-source is-real">示范音来自 CMS 已审核发布的正式录音。</p>
+      <template v-if="showLevelBody">
+        <p v-if="demoIsSynthetic" class="disclaimer demo-source">{{ ttsDisclaimer }}</p>
+        <p v-else class="disclaimer demo-source is-real">示范音来自 CMS 已审核发布的正式录音。</p>
+      </template>
 
       <!-- 未开放 / 只学不测：明确状态，不给检测入口、不给分数 -->
       <el-alert
@@ -251,7 +290,8 @@ async function analyzeAndGoFeedback() {
         description="当前评分还不能稳定复现，所以不开放检测，也就不会给出分数。跟着示范读熟就好。"
       />
 
-      <div class="level-body">
+      <!-- 未开放：整块教学区不渲染（没有过审内容就不摆空卡片，也不给检测入口） -->
+      <div v-if="showLevelBody" class="level-body">
         <!-- 示范 / 练习：内容来自 CMS -->
         <div class="card block">
           <h3>跟着读</h3>
@@ -311,6 +351,11 @@ async function analyzeAndGoFeedback() {
                 {{ recordingStore.isAnalyzing ? '分析中…' : '看看读得怎么样' }}
               </el-button>
             </div>
+            <!-- 家长同意存档：未同意时如实说明「不保存」，同意才会写档案（第 7 周 D） -->
+            <p class="archive-hint">
+              <template v-if="consented">已同意保存：本次结果会写入「我的声音」档案，可随时撤回并删除。</template>
+              <template v-else>录音默认不保存。分析完会问你一次「要不要存进档案」，家长同意后才写入。</template>
+            </p>
             <!-- 分析失败必须说清原因，不能静默（后端没起、麦克风异常、网络失败都在这里暴露） -->
             <el-alert
               v-if="recordingStore.error"
@@ -323,7 +368,7 @@ async function analyzeAndGoFeedback() {
             />
           </template>
           <p v-else class="block-text muted">
-            {{ copy.unopened }}
+            {{ detectionHint }}
           </p>
         </div>
 
@@ -439,6 +484,7 @@ async function analyzeAndGoFeedback() {
 .level-char { font-size: 13px; color: #606266; }
 .level-hint { margin: 8px 0 0; font-size: 14px; color: #606266; }
 .level-actions { display: flex; flex-direction: column; gap: 8px; }
+.level-actions-note { max-width: 160px; font-size: 12px; color: #a8abb2; line-height: 1.6; }
 .level-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
 .block h3 { margin: 0 0 12px; font-size: 16px; color: #303133; }
 .block-text { font-size: 14px; color: #303133; line-height: 1.7; margin: 0 0 8px; }
@@ -465,6 +511,7 @@ async function analyzeAndGoFeedback() {
 .record-time { font-size: 22px; font-weight: 600; color: #303133; font-variant-numeric: tabular-nums; }
 .waveform-canvas { width: 100%; height: 110px; border-radius: 8px; background: #1a1a2e; }
 .record-actions { margin-top: 12px; display: flex; gap: 12px; }
+.archive-hint { margin: 10px 0 0; font-size: 12px; color: #a8abb2; line-height: 1.6; }
 .record-error { margin-top: 12px; text-align: left; }
 
 /* ---- 列表 ---- */
