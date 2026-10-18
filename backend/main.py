@@ -30,14 +30,16 @@ if any(m in _pythonpath.lower() for m in _shim_markers):
     parts = [p for p in _pythonpath.split(os.pathsep) if p and not any(m in p.lower() for m in _shim_markers)]
     os.environ["PYTHONPATH"] = os.pathsep.join(parts)
 
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 import librosa
 import torch
 
 import database
+import llm_service
+from database import CmsStateError
 from audio_analyzer import (
     analyze_with_deep_learning,
     analyze_audio_quality,
@@ -50,11 +52,16 @@ from audio_analyzer import (
     unit_verified,
 )
 from feedback_engine import build_four_step_feedback, compute_reliability
+import cms_routes
 
 app = FastAPI(title="看得见的声音 API", version="1.0.0")
 
 # 启动时初始化 SQLite 数据库（幂等建表）
-database.init_db()
+# 用 database.DB_PATH 而非写死默认值，便于测试脚本先指向临时库
+database.init_db(database.DB_PATH)
+
+# CMS 管理接口（四状态机 / 下架 / 检测开关 / 操作日志，第 6 周 C）
+app.include_router(cms_routes.router)
 
 # CORS配置 - 允许所有本地开发端口
 app.add_middleware(
@@ -466,6 +473,53 @@ async def load_asr_endpoint():
     ok = load_asr_model()
     return {"code": 200, "data": {"loaded": ok, **asr_status()}}
 
+
+# ---------------------------------------------------------------------------
+# 本地大模型对话（Ollama，Z 组）
+# ---------------------------------------------------------------------------
+class ChatMessage(BaseModel):
+    role: str = "user"          # system / user / assistant
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    temperature: float = 0.7
+
+
+@app.post("/api/llm/chat")
+def llm_chat(req: ChatRequest):
+    """本地大模型对话（转发 Ollama），返回模型结果 JSON"""
+    if not llm_service.is_available():
+        return JSONResponse(
+            status_code=503,
+            content={"code": 503, "message": "本地大模型服务（Ollama）未运行，请先启动"},
+        )
+    try:
+        reply = llm_service.chat(
+            [m.model_dump() for m in req.messages], temperature=req.temperature
+        )
+        return {"code": 200, "data": {"model": llm_service.OLLAMA_MODEL, "reply": reply}}
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            status_code=500,
+            content={"code": 500, "message": f"大模型调用失败: {str(e)}"},
+        )
+
+
+@app.post("/api/llm/chat/stream")
+def llm_chat_stream(req: ChatRequest):
+    """本地大模型流式对话（SSE），逐段返回回复文本，供前端打字机效果"""
+    def gen():
+        try:
+            for piece in llm_service.chat_stream(
+                [m.model_dump() for m in req.messages], temperature=req.temperature
+            ):
+                yield f"data: {json.dumps({'content': piece}, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 class UserProgress(BaseModel):
     userId: str
     totalUnits: int = 12
@@ -569,30 +623,34 @@ async def get_unit(unit_id: str):
 
 
 @app.post("/api/units")
-async def create_unit(payload: dict):
-    """新增发音单元（后台录入，字段与文档 UNIT-01~10 对齐）"""
+async def create_unit(payload: dict, x_operator: str | None = Header(default=None)):
+    """新增发音单元（后台录入，字段与文档 UNIT-01~10 对齐）。
+    第 6 周 C：录入即草稿 draft，发布必须走 /api/admin/units/{id}/approve。"""
     try:
-        unit_id = database.create_unit(payload)
-        return {"code": 200, "message": "单元已创建", "data": {"id": unit_id}}
+        unit_id = database.create_unit(payload, x_operator or "admin")
+        return {"code": 200, "message": "单元已创建（草稿，待提交审核）", "data": {"id": unit_id}}
     except Exception as e:
         return JSONResponse(status_code=400, content={"code": 400, "message": f"创建失败: {str(e)}"})
 
 
 @app.put("/api/units/{unit_id}")
-async def update_unit(unit_id: str, payload: dict):
-    """更新发音单元（含状态/验证标记）"""
-    ok = database.update_unit(unit_id, payload)
+async def update_unit(unit_id: str, payload: dict, x_operator: str | None = Header(default=None)):
+    """编辑发音单元（第 6 周 C：内容编辑仅限草稿/驳回，状态变更走审核流转接口）"""
+    try:
+        ok = database.update_unit(unit_id, payload, x_operator or "admin")
+    except CmsStateError as exc:
+        return JSONResponse(status_code=400, content={"code": 400, "message": str(exc)})
     if not ok:
         return JSONResponse(status_code=404, content={"code": 404, "message": "单元不存在"})
     return {"code": 200, "message": "单元已更新"}
 
 
 @app.delete("/api/units/{unit_id}")
-async def delete_unit(unit_id: str):
+async def delete_unit(unit_id: str, x_operator: str | None = Header(default=None)):
     """删除发音单元（核心单元受保护，仅允许删除扩展单元）"""
     if unit_id in database.CORE_UNITS_IDS:
         return JSONResponse(status_code=400, content={"code": 400, "message": "核心单元受保护，不可删除；可改为草稿状态下线"})
-    ok = database.delete_unit(unit_id)
+    ok = database.delete_unit(unit_id, x_operator or "admin")
     if not ok:
         return JSONResponse(status_code=404, content={"code": 404, "message": "单元不存在"})
     return {"code": 200, "message": "单元已删除"}

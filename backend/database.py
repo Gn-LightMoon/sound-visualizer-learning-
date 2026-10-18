@@ -15,6 +15,24 @@ from typing import Optional
 
 DB_PATH = "pronunciation.db"
 
+
+# ===========================================================================
+# CMS 四状态机（第 6 周 C：从 week4 迁移，对齐仓库 published 语义）
+# 草稿/驳回 -> 提交审核 -> 待审核 -> 通过(发布) / 驳回；已发布 -> 下架(回草稿)
+# ===========================================================================
+UNIT_STATUS_TRANSITIONS = {
+    "draft": {"submit_review": "pending_review"},
+    "rejected": {"submit_review": "pending_review"},
+    "pending_review": {"approve": "published", "reject": "rejected"},
+    "published": {"unpublish": "draft"},
+}
+# 仅草稿/驳回允许编辑内容；检测开关(verified)不受此限，走专用接口
+EDITABLE_STATUSES = ("draft", "rejected")
+
+
+class CmsStateError(ValueError):
+    """非法 CMS 状态流转（草稿直接发布、已发布再驳回等）"""
+
 # 12 个发音单元（与 main.py /api/pronunciation-units 保持一致）
 DEFAULT_UNITS = [
     {"id": "ma", "pinyin": "mā", "character": "妈"},
@@ -41,6 +59,47 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _ensure_cms_columns(conn: sqlite3.Connection) -> None:
+    """老库增量迁移：pronunciation_units 缺 CMS 审核/30关正式字段时自动补列。
+    新库由 CREATE TABLE 之外的本函数补齐，保证「已有数据不丢、代码升级即迁移」。
+    对应 D 的 seed_levels_30.py FIELD MAPPING：demo_audio / practice / version / 审核字段。"""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(pronunciation_units)").fetchall()}
+    additions = {
+        "demo_audio": "TEXT NOT NULL DEFAULT ''",          # 示范音频路径（D AdminView 已预留录入位）
+        "practice": "TEXT NOT NULL DEFAULT '[]'",          # 练习内容（JSON 数组）
+        "version": "INTEGER NOT NULL DEFAULT 1",           # 版本号：每次内容编辑自动 +1，可追溯
+        "submit_review_time": "TEXT NOT NULL DEFAULT ''",  # 最近一次提交审核时间
+        "review_time": "TEXT NOT NULL DEFAULT ''",         # 最近一次审核完成时间
+        "reviewer": "TEXT NOT NULL DEFAULT ''",            # 审核人（第7周接管理员账号）
+        "review_comment": "TEXT NOT NULL DEFAULT ''",      # 驳回意见，仅驳回时有值
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE pronunciation_units ADD COLUMN {name} {ddl}")
+
+
+def _write_audit(
+    conn: sqlite3.Connection,
+    operator: str,
+    action: str,
+    resource_id: str | None = None,
+    remark: str = "",
+) -> None:
+    """每次 CMS 操作落一条操作日志（操作人/动作/资源/备注/时间）"""
+    conn.execute(
+        """INSERT INTO audit_log (operator, action, resource_type, resource_id, remark, created_at)
+           VALUES (?, ?, 'unit', ?, ?, ?)""",
+        (operator or "admin", action, resource_id, remark, _now()),
+    )
+
+
+def _check_transition(current: str, action: str) -> None:
+    """按 UNIT_STATUS_TRANSITIONS 校验状态流转，非法动作抛 CmsStateError"""
+    allowed = UNIT_STATUS_TRANSITIONS.get(current, {})
+    if action not in allowed:
+        raise CmsStateError(f"当前状态为「{current}」，不允许执行「{action}」操作")
 
 
 def init_db(db_path: str = "pronunciation.db") -> None:
@@ -128,8 +187,19 @@ def init_db(db_path: str = "pronunciation.db") -> None:
                 path TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator TEXT NOT NULL,
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL DEFAULT 'unit',
+                resource_id TEXT,
+                remark TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
             """
         )
+        _ensure_cms_columns(conn)
         _seed_units(conn)
         _enrich_appendix_a_units(conn)
         conn.commit()
@@ -782,6 +852,13 @@ def _unit_to_dict(row: sqlite3.Row) -> dict:
         "status": row["status"],
         "verified": bool(row["verified"]),
         "order": row["order_no"],
+        "demoAudio": row["demo_audio"],
+        "practice": json.loads(row["practice"] or "[]"),
+        "version": row["version"],
+        "submitReviewTime": row["submit_review_time"] or None,
+        "reviewTime": row["review_time"] or None,
+        "reviewer": row["reviewer"] or None,
+        "reviewComment": row["review_comment"] or None,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -815,7 +892,9 @@ def get_unit(unit_id: str) -> Optional[dict]:
         conn.close()
 
 
-def create_unit(data: dict) -> str:
+def create_unit(data: dict, operator: str = "admin") -> str:
+    """录入发音单元：状态恒为草稿 draft（未审核不公开），版本从 1 起。
+    状态机口径：录入即草稿，发布必须走 /api/admin/units/{id}/approve 审核流转。"""
     now = _now()
     conn = _connect()
     try:
@@ -823,23 +902,31 @@ def create_unit(data: dict) -> str:
         conn.execute(
             """INSERT INTO pronunciation_units
                (id, pinyin, character, category, description, conclusion, detail, mistakes, steps,
-                related, status, verified, order_no, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                related, status, verified, order_no, demo_audio, practice, version,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, 1, ?, ?)""",
             (unit_id, data.get("pinyin", ""), data.get("character", ""), data.get("category", "声母"),
              data.get("description", ""), data.get("conclusion", ""), data.get("detail", ""),
              json.dumps(data.get("mistakes", []), ensure_ascii=False),
              json.dumps(data.get("steps", []), ensure_ascii=False),
              json.dumps(data.get("related", []), ensure_ascii=False),
-             data.get("status", "draft"), 1 if data.get("verified") else 0,
-             int(data.get("order", 0)), now, now),
+             1 if data.get("verified") else 0, int(data.get("order", 0)),
+             data.get("demo_audio", ""),
+             json.dumps(data.get("practice", []), ensure_ascii=False),
+             now, now),
         )
+        _write_audit(conn, operator, "create", unit_id, f"新建单元：{data.get('pinyin', '')}")
         conn.commit()
         return unit_id
     finally:
         conn.close()
 
 
-def update_unit(unit_id: str, data: dict) -> bool:
+def update_unit(unit_id: str, data: dict, operator: str = "admin") -> bool:
+    """编辑发音单元（内容编辑，状态机约束）：
+    - 内容字段仅草稿/驳回状态可改，待审核/已发布返回 CmsStateError；
+    - 状态变更不可走本接口，必须走审核流转接口（submit-review / approve / reject / unpublish）；
+    - 每次成功编辑 version 自动 +1，并落操作日志。"""
     conn = _connect()
     try:
         row = conn.execute(
@@ -848,17 +935,37 @@ def update_unit(unit_id: str, data: dict) -> bool:
         if row is None:
             return False
         cur = _unit_to_dict(row)
+
+        # 状态机约束：status 只允许原值；内容字段（除 verified/order）仅草稿/驳回可改
+        if "status" in data and data.get("status") != cur["status"]:
+            raise CmsStateError(
+                f"状态变更请走审核流转接口（当前「{cur['status']}」），不可直接修改"
+            )
+        content_keys = {k for k in data if k not in ("verified", "order", "status")}
+        if content_keys and cur["status"] not in EDITABLE_STATUSES:
+            raise CmsStateError(
+                f"当前状态为「{cur['status']}」，不允许编辑；仅草稿/驳回状态可编辑"
+            )
+
         merged = {**cur, **{k: v for k, v in data.items() if k in cur or k == "order"}}
+        merged["version"] = int(cur["version"]) + 1
         conn.execute(
             """UPDATE pronunciation_units SET pinyin=?, character=?, category=?, description=?,
                conclusion=?, detail=?, mistakes=?, steps=?, related=?, status=?, verified=?,
-               order_no=?, updated_at=? WHERE id=?""",
+               order_no=?, demo_audio=?, practice=?, version=?, updated_at=? WHERE id=?""",
             (merged["pinyin"], merged["character"], merged["category"], merged["description"],
              merged["conclusion"], merged["detail"],
              json.dumps(merged["mistakes"], ensure_ascii=False),
              json.dumps(merged["steps"], ensure_ascii=False),
              json.dumps(merged["related"], ensure_ascii=False),
-             merged["status"], 1 if merged["verified"] else 0, merged["order"], _now(), unit_id),
+             merged["status"], 1 if merged["verified"] else 0, merged["order"],
+             merged["demoAudio"],
+             json.dumps(merged["practice"], ensure_ascii=False),
+             merged["version"], _now(), unit_id),
+        )
+        _write_audit(
+            conn, operator, "update", unit_id,
+            f"编辑内容（版本 v{cur['version']} → v{merged['version']}）",
         )
         conn.commit()
         return True
@@ -866,12 +973,169 @@ def update_unit(unit_id: str, data: dict) -> bool:
         conn.close()
 
 
-def delete_unit(unit_id: str) -> bool:
+def delete_unit(unit_id: str, operator: str = "admin") -> bool:
+    """删除发音单元（仅扩展单元；核心单元由路由层保护）。删除也落操作日志。"""
     conn = _connect()
     try:
         cur = conn.execute("DELETE FROM pronunciation_units WHERE id = ?", (unit_id,))
+        if cur.rowcount > 0:
+            _write_audit(conn, operator, "delete", unit_id, "删除单元")
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# CMS 审核流转（第 6 周 C：四状态机 + 下架 + 检测开关）
+# 返回流转后的单元字典；单元不存在返回 None；非法流转抛 CmsStateError
+# ---------------------------------------------------------------------------
+def _fetch_unit(conn: sqlite3.Connection, unit_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM pronunciation_units WHERE id = ?", (unit_id,)
+    ).fetchone()
+
+
+def submit_review(unit_id: str, operator: str = "admin") -> dict | None:
+    """提交审核：draft/rejected -> pending_review；重提清空上一轮审核结论"""
+    conn = _connect()
+    try:
+        row = _fetch_unit(conn, unit_id)
+        if row is None:
+            return None
+        cur = _unit_to_dict(row)
+        _check_transition(cur["status"], "submit_review")
+        now = _now()
+        conn.execute(
+            """UPDATE pronunciation_units
+               SET status='pending_review', submit_review_time=?,
+                   review_time='', reviewer='', review_comment='', updated_at=?
+               WHERE id=?""",
+            (now, now, unit_id),
+        )
+        _write_audit(conn, operator, "submit_review", unit_id, "提交审核")
+        conn.commit()
+        return _unit_to_dict(_fetch_unit(conn, unit_id))
+    finally:
+        conn.close()
+
+
+def approve_unit(unit_id: str, operator: str = "admin") -> dict | None:
+    """审核通过（发布）：pending_review -> published，记录审核人与时间"""
+    conn = _connect()
+    try:
+        row = _fetch_unit(conn, unit_id)
+        if row is None:
+            return None
+        cur = _unit_to_dict(row)
+        _check_transition(cur["status"], "approve")
+        now = _now()
+        conn.execute(
+            """UPDATE pronunciation_units
+               SET status='published', review_time=?, reviewer=?, review_comment='', updated_at=?
+               WHERE id=?""",
+            (now, operator or "admin", now, unit_id),
+        )
+        _write_audit(conn, operator, "approve", unit_id, "审核通过并发布")
+        conn.commit()
+        return _unit_to_dict(_fetch_unit(conn, unit_id))
+    finally:
+        conn.close()
+
+
+def reject_unit(unit_id: str, operator: str = "admin", comment: str = "") -> dict | None:
+    """审核驳回：pending_review -> rejected，驳回原因必填"""
+    if not (comment or "").strip():
+        raise CmsStateError("驳回必须填写原因（review_comment）")
+    conn = _connect()
+    try:
+        row = _fetch_unit(conn, unit_id)
+        if row is None:
+            return None
+        cur = _unit_to_dict(row)
+        _check_transition(cur["status"], "reject")
+        now = _now()
+        conn.execute(
+            """UPDATE pronunciation_units
+               SET status='rejected', review_time=?, reviewer=?, review_comment=?, updated_at=?
+               WHERE id=?""",
+            (now, operator or "admin", comment.strip(), now, unit_id),
+        )
+        _write_audit(conn, operator, "reject", unit_id, f"驳回原因：{comment.strip()}")
+        conn.commit()
+        return _unit_to_dict(_fetch_unit(conn, unit_id))
+    finally:
+        conn.close()
+
+
+def unpublish_unit(unit_id: str, operator: str = "admin") -> dict | None:
+    """下架：published -> draft，大众端立即不可见（未审核不公开）"""
+    conn = _connect()
+    try:
+        row = _fetch_unit(conn, unit_id)
+        if row is None:
+            return None
+        cur = _unit_to_dict(row)
+        _check_transition(cur["status"], "unpublish")
+        conn.execute(
+            """UPDATE pronunciation_units SET status='draft', updated_at=? WHERE id=?""",
+            (_now(), unit_id),
+        )
+        _write_audit(conn, operator, "unpublish", unit_id, "下架（回到草稿）")
+        conn.commit()
+        return _unit_to_dict(_fetch_unit(conn, unit_id))
+    finally:
+        conn.close()
+
+
+def set_detection(unit_id: str, operator: str = "admin", verified: bool = False) -> dict | None:
+    """检测开关（CON-04）：verified 决定「可练可测 / 只学不测」。
+    由 A/B 提供的「可稳定评分清单」决定能否开启；任何状态都可切换。"""
+    conn = _connect()
+    try:
+        row = _fetch_unit(conn, unit_id)
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE pronunciation_units SET verified=?, updated_at=? WHERE id=?",
+            (1 if verified else 0, _now(), unit_id),
+        )
+        _write_audit(
+            conn, operator, "set_detection", unit_id,
+            f"检测开关：{'开启' if verified else '关闭'}",
+        )
+        conn.commit()
+        return _unit_to_dict(_fetch_unit(conn, unit_id))
+    finally:
+        conn.close()
+
+
+def get_audit_logs(resource_id: str = "", limit: int = 100) -> list[dict]:
+    """操作日志查询：可按资源 id 过滤，倒序返回"""
+    conn = _connect()
+    try:
+        if resource_id:
+            rows = conn.execute(
+                "SELECT * FROM audit_log WHERE resource_id = ? ORDER BY id DESC LIMIT ?",
+                (resource_id, max(1, min(limit, 500))),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "operator": r["operator"],
+                "action": r["action"],
+                "resourceType": r["resource_type"],
+                "resourceId": r["resource_id"],
+                "remark": r["remark"],
+                "createdAt": r["created_at"],
+            }
+            for r in rows
+        ]
     finally:
         conn.close()
 
