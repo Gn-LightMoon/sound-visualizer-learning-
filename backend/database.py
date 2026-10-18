@@ -7,7 +7,9 @@ SQLite 持久化：学习记录（含录音二进制 BLOB）、用户进度。
 - 列表/统计接口绝不携带 BLOB，录音通过 /api/learning-records/{id}/audio 按需拉取
 - 时间戳统一存 created_at（ISO8601 UTC），接口层映射为前端 createdAt
 """
+import hashlib
 import json
+import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -74,6 +76,7 @@ def _ensure_cms_columns(conn: sqlite3.Connection) -> None:
         "review_time": "TEXT NOT NULL DEFAULT ''",         # 最近一次审核完成时间
         "reviewer": "TEXT NOT NULL DEFAULT ''",            # 审核人（第7周接管理员账号）
         "review_comment": "TEXT NOT NULL DEFAULT ''",      # 驳回意见，仅驳回时有值
+        "creator": "TEXT NOT NULL DEFAULT ''",             # 创建人（第7周：创建人不能审核自己）
     }
     for name, ddl in additions.items():
         if name not in columns:
@@ -197,11 +200,37 @@ def init_db(db_path: str = "pronunciation.db") -> None:
                 remark TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS admin_user (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_token (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS unit_version_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                unit_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                operator TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ver_history_unit ON unit_version_history(unit_id, version);
             """
         )
         _ensure_cms_columns(conn)
         _seed_units(conn)
         _enrich_appendix_a_units(conn)
+        _seed_admin(conn)
         conn.commit()
     finally:
         conn.close()
@@ -855,6 +884,7 @@ def _unit_to_dict(row: sqlite3.Row) -> dict:
         "demoAudio": row["demo_audio"],
         "practice": json.loads(row["practice"] or "[]"),
         "version": row["version"],
+        "creator": row["creator"] or None,
         "submitReviewTime": row["submit_review_time"] or None,
         "reviewTime": row["review_time"] or None,
         "reviewer": row["reviewer"] or None,
@@ -903,8 +933,8 @@ def create_unit(data: dict, operator: str = "admin") -> str:
             """INSERT INTO pronunciation_units
                (id, pinyin, character, category, description, conclusion, detail, mistakes, steps,
                 related, status, verified, order_no, demo_audio, practice, version,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, 1, ?, ?)""",
+                creator, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, 1, ?, ?, ?)""",
             (unit_id, data.get("pinyin", ""), data.get("character", ""), data.get("category", "声母"),
              data.get("description", ""), data.get("conclusion", ""), data.get("detail", ""),
              json.dumps(data.get("mistakes", []), ensure_ascii=False),
@@ -913,8 +943,13 @@ def create_unit(data: dict, operator: str = "admin") -> str:
              1 if data.get("verified") else 0, int(data.get("order", 0)),
              data.get("demo_audio", ""),
              json.dumps(data.get("practice", []), ensure_ascii=False),
-             now, now),
+             operator or "admin", now, now),
         )
+        # v1 版本快照（第 7 周 C：版本历史的第一行，内容追溯起点）
+        row = conn.execute(
+            "SELECT * FROM pronunciation_units WHERE id = ?", (unit_id,)
+        ).fetchone()
+        _snapshot_version(conn, unit_id, 1, _unit_to_dict(row), operator, "创建")
         _write_audit(conn, operator, "create", unit_id, f"新建单元：{data.get('pinyin', '')}")
         conn.commit()
         return unit_id
@@ -962,6 +997,13 @@ def update_unit(unit_id: str, data: dict, operator: str = "admin") -> bool:
              merged["demoAudio"],
              json.dumps(merged["practice"], ensure_ascii=False),
              merged["version"], _now(), unit_id),
+        )
+        # 版本快照（第 7 周 C：每次编辑留一版内容，历史可对比追溯）
+        row = conn.execute(
+            "SELECT * FROM pronunciation_units WHERE id = ?", (unit_id,)
+        ).fetchone()
+        _snapshot_version(
+            conn, unit_id, merged["version"], _unit_to_dict(row), operator, "编辑内容"
         )
         _write_audit(
             conn, operator, "update", unit_id,
@@ -1020,6 +1062,12 @@ def submit_review(unit_id: str, operator: str = "admin") -> dict | None:
         conn.close()
 
 
+def _reject_self_review(row: sqlite3.Row, operator: str) -> None:
+    """创建人不能审核自己（第 7 周 C：代码拦截，防止既当运动员又当裁判）"""
+    if row["creator"] and row["creator"] == operator:
+        raise CmsStateError("创建人不能审核自己的内容，请换一位管理员审核")
+
+
 def approve_unit(unit_id: str, operator: str = "admin") -> dict | None:
     """审核通过（发布）：pending_review -> published，记录审核人与时间"""
     conn = _connect()
@@ -1029,6 +1077,7 @@ def approve_unit(unit_id: str, operator: str = "admin") -> dict | None:
             return None
         cur = _unit_to_dict(row)
         _check_transition(cur["status"], "approve")
+        _reject_self_review(row, operator)
         now = _now()
         conn.execute(
             """UPDATE pronunciation_units
@@ -1054,6 +1103,7 @@ def reject_unit(unit_id: str, operator: str = "admin", comment: str = "") -> dic
             return None
         cur = _unit_to_dict(row)
         _check_transition(cur["status"], "reject")
+        _reject_self_review(row, operator)
         now = _now()
         conn.execute(
             """UPDATE pronunciation_units
@@ -1133,6 +1183,162 @@ def get_audit_logs(resource_id: str = "", limit: int = 100) -> list[dict]:
                 "resourceId": r["resource_id"],
                 "remark": r["remark"],
                 "createdAt": r["created_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 管理员账号与登录鉴权（第 7 周 C：admin_user + token，替换 X-Operator 假鉴权）
+# 密码 PBKDF2-SHA256 加盐哈希；token 随机 32 字节 hex，落库可吊销
+# ---------------------------------------------------------------------------
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "admin123"
+_PBKDF2_ITERATIONS = 100_000
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERATIONS
+    ).hex()
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt}${digest}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters, salt, digest = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        calc = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt), int(iters)
+        ).hex()
+        return secrets.compare_digest(calc, digest)
+    except (ValueError, TypeError):
+        return False
+
+
+def _seed_admin(conn: sqlite3.Connection) -> None:
+    """幂等播种初始管理员 admin/admin123（仅当 admin_user 为空时）"""
+    if conn.execute("SELECT 1 FROM admin_user LIMIT 1").fetchone() is None:
+        conn.execute(
+            "INSERT INTO admin_user (username, password_hash, display_name, created_at) VALUES (?, ?, ?, ?)",
+            (DEFAULT_ADMIN_USERNAME, _hash_password(DEFAULT_ADMIN_PASSWORD), "管理员", _now()),
+        )
+        print(
+            f"[database] 已创建初始管理员 {DEFAULT_ADMIN_USERNAME}/{DEFAULT_ADMIN_PASSWORD}，"
+            "请尽快通过 POST /api/admin/change-password 修改密码"
+        )
+
+
+def verify_admin(username: str, password: str) -> tuple[str, str] | None:
+    """校验管理员账号密码；成功返回 (username, display_name)，失败返回 None"""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM admin_user WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None or not _verify_password(password, row["password_hash"]):
+            return None
+        return (row["username"], row["display_name"])
+    finally:
+        conn.close()
+
+
+def issue_token(username: str) -> str:
+    """登录成功后签发 token（落库，登出时吊销）"""
+    token = secrets.token_hex(32)
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO admin_token (token, username, created_at) VALUES (?, ?, ?)",
+            (token, username, _now()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def token_to_user(token: str) -> str | None:
+    """token → 管理员用户名；无效/已吊销返回 None"""
+    if not token:
+        return None
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT username FROM admin_token WHERE token = ?", (token,)
+        ).fetchone()
+        return row["username"] if row else None
+    finally:
+        conn.close()
+
+
+def revoke_token(token: str) -> None:
+    """吊销 token（登出）"""
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM admin_token WHERE token = ?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def change_password(username: str, old_password: str, new_password: str) -> bool:
+    """修改密码：校验旧密码后更新哈希"""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM admin_user WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None or not _verify_password(old_password, row["password_hash"]):
+            return False
+        conn.execute(
+            "UPDATE admin_user SET password_hash = ? WHERE username = ?",
+            (_hash_password(new_password), username),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 版本历史快照（第 7 周 C：unit_version_history，内容编辑留痕、版本可追溯）
+# ---------------------------------------------------------------------------
+def _snapshot_version(
+    conn: sqlite3.Connection,
+    unit_id: str,
+    version: int,
+    snapshot: dict,
+    operator: str,
+    reason: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO unit_version_history (unit_id, version, snapshot_json, operator, reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (unit_id, version, json.dumps(snapshot, ensure_ascii=False, default=str),
+         operator, reason, _now()),
+    )
+
+
+def get_unit_versions(unit_id: str) -> list[dict]:
+    """版本历史：按版本号正序返回，含每版内容快照（供 CMS 对比追溯）"""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM unit_version_history WHERE unit_id = ? ORDER BY version",
+            (unit_id,),
+        ).fetchall()
+        return [
+            {
+                "version": r["version"],
+                "operator": r["operator"],
+                "reason": r["reason"],
+                "createdAt": r["created_at"],
+                "snapshot": json.loads(r["snapshot_json"]),
             }
             for r in rows
         ]
