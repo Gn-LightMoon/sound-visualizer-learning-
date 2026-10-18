@@ -199,12 +199,13 @@ function renderTrend() {
   chart.setOption({
     title: { text: '同一任务的历次表现', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: { trigger: 'axis' },
-    legend: { data: ['总分', '准确度', '流利度'], bottom: 0, textStyle: { fontSize: 11 } },
-    grid: { left: 44, right: 20, top: 36, bottom: 44 },
+    // 图例放右侧竖排：放底部会和旋转后的时间轴标签叠在一起（截图核对过）
+    legend: { data: ['总分', '准确度', '流利度'], orient: 'vertical', right: 0, top: 'middle', textStyle: { fontSize: 11 } },
+    grid: { left: 44, right: 104, top: 36, bottom: 40 },
     xAxis: {
       type: 'category',
       data: list.map(r => trendLabel(r)),
-      axisLabel: { fontSize: 10, rotate: 30 },
+      axisLabel: { fontSize: 10, rotate: 30, hideOverlap: true, margin: 8 },
     },
     yAxis: { type: 'value', min: 0, max: 100, name: '分' },
     series: [
