@@ -213,6 +213,8 @@ export const PAGES: PageDef[] = [
     code: 'P10',
     paths: ['/archive'],
     name: 'archive',
+    // /compare 是 P10 下的子页（多次录音对比），页号不另起
+    routeNames: ['archive', 'compare'],
     title: '我的声音档案',
     childTitle: '我的声音',
     childNav: true,

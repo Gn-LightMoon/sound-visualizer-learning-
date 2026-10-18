@@ -124,7 +124,20 @@ const rightRecord = computed(() => compareRecords.value.find(r => r.id === right
         </div>
 
         <el-card class="compare-card">
-          <h3>同任务比较</h3>
+          <template #header>
+            <div class="compare-head">
+              <span>同任务比较</span>
+              <el-button
+                v-if="compareUnit && compareRecords.length >= 2"
+                size="small"
+                type="primary"
+                plain
+                @click="router.push(`/compare?unit=${compareUnit}`)"
+              >
+                并排对比 / 看趋势 →
+              </el-button>
+            </div>
+          </template>
           <el-select v-model="compareUnit" placeholder="选择任务/单元" style="width:100%;margin-bottom:12px">
             <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
           </el-select>
@@ -177,6 +190,7 @@ const rightRecord = computed(() => compareRecords.value.find(r => r.id === right
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 .compare-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .compare-result { font-size: 14px; line-height: 1.8; }
+.compare-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hint { color: #909399; font-size: 13px; }
 @media (max-width: 600px) { .compare-pick { grid-template-columns: 1fr; } }
 </style>

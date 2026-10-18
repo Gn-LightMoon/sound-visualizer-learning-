@@ -26,13 +26,14 @@ const routes: RouteRecordRaw[] = [
   { path: '/learn/:id', name: 'level', component: () => import('@/views/LearningView.vue'), meta: meta('level', '关卡页') },
   { path: '/feedback/:id', name: 'feedback', component: () => import('@/views/FeedbackView.vue'), meta: meta('feedback', '检测结果') },
   { path: '/archive', name: 'archive', component: () => import('@/views/HistoryView.vue'), meta: meta('archive', '我的声音档案') },
+  // P10 下的子页：多次录音对比（第 7 周 D：真实多次录音对比，页号仍记 P10）
+  { path: '/compare', name: 'compare', component: () => import('@/views/ComparisonView.vue'), meta: meta('archive', '多次录音对比', { childNav: false }) },
   // 后台（CMS）：不属于十页儿童页面
   { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue'), meta: meta('admin', '后台管理') },
   // 兼容旧路由
   { path: '/home', redirect: '/' },
   { path: '/history', redirect: '/archive' },
   { path: '/progress', redirect: '/archive' },
-  { path: '/compare', redirect: '/archive' },
   { path: '/progress-manage', redirect: '/archive' },
 ]
 
