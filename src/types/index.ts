@@ -83,6 +83,9 @@ export interface AudioAnalysisResult {
   //新增：
   voiced_flag?: boolean[]
   voiced_probs?: number[]
+  /** 后端历史拼写（voiecd_flag，多一个 c），仅为兼容保留；正式字段名是 voiced_flag。
+   *  兼容解析见 src/stores/recording.ts 的 resolveVoicedFlag()。 */
+  voiecd_flag?: boolean[]
   
   // 深度学习分析结果
   recognizedText: string // Wav2Vec2 识别出的拼音文本

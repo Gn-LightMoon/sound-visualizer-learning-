@@ -1091,6 +1091,18 @@ watch(
       </div>
     </div>
 
+    <!-- 服务端未加载 ASR 模型时如实说明：原来是静默留白，容易被当成"页面没做完"（第 6 周 D 补） -->
+    <el-alert
+      v-if="assessment?.evaluable && assessment?.audioAnalysis
+        && !assessment?.audioAnalysis?.phonemes?.length && !assessment?.audioAnalysis?.recognizedText"
+      class="phoneme-unavailable"
+      type="info"
+      show-icon
+      :closable="false"
+      title="本次结果不含音素级分析（服务端未加载语音识别模型）"
+      description="声调曲线、共振峰、能量与上方四步反馈都来自声学分析，结论不受影响。需要音素级对比时，请在服务端加载 ASR 模型（POST /api/asr/load）后再录一次。"
+    />
+
     <!-- 声调曲线 + 3D动画（仅可评价时展示） -->
     <div v-if="assessment?.evaluable && assessment?.audioAnalysis" class="analysis-row">
       <div class="chart-card">
@@ -1187,6 +1199,7 @@ watch(
 .score-item { display: flex; align-items: center; gap: 12px; }
 .score-item span { width: 60px; font-size: 14px; color: #606266; }
 .analysis-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.phoneme-unavailable { margin-top: 4px; }
 .analysis-row.three-col { grid-template-columns: 1fr 1fr 1fr; }
 .spectrogram-canvas { width: 100%; height: 200px; border-radius: 8px; background: #0a0a1a; }
 .chart-desc { font-size: 11px; color: #909399; text-align: center; margin-top: 6px; }
