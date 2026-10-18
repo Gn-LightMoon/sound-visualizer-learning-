@@ -88,5 +88,43 @@ check(open + learnOnly + unopened === 30, '30 关状态合计为 30', `可练可
 console.log(`     可练可测：${openList.join(', ') || '（无）'}`);
 console.log(`     冻结版本：${freeze.version}`);
 
+// 4) 已发布关必须完整（第 8 周 D）：P08 会渲染 conclusion + steps + mistakes，
+//    任何一项为空都会在页面上变成「这一关还没有内容」的空卡片 —— 正是排期禁止的。
+const stepCount = (u) => (Array.isArray(u?.steps) ? u.steps.length : 0);
+const mistakeCount = (u) => (Array.isArray(u?.mistakes) ? u.mistakes.length : 0);
+const incompletePublished = [];
+for (const lv of levels) {
+  const unit =
+    (publishedIds.has(lv.code) ? allById.get(lv.code) : null) ??
+    lv.cmsIds.map((id) => (publishedIds.has(id) ? allById.get(id) : null)).find(Boolean) ??
+    null;
+  if (!unit) continue;
+  const missing = [];
+  if (!String(unit.conclusion || '').trim()) missing.push('conclusion');
+  if (stepCount(unit) === 0) missing.push('steps');
+  if (mistakeCount(unit) === 0) missing.push('mistakes');
+  if (missing.length) incompletePublished.push(`${lv.code}(${unit.id}) 缺 ${missing.join('/')}`);
+}
+check(
+  incompletePublished.length === 0,
+  '已发布关内容完整（不发空卡片）',
+  incompletePublished.length ? incompletePublished.join('；') : `${open + learnOnly} 关已发布关结论/步骤/误区齐全`,
+);
+
+// 5) 草稿内容齐备度：C 一旦发布，页面就会读这些字段；缺内容的关发布出来就是空卡片，
+//    所以这里提前把「还没内容、暂不可发布」的关列清楚（不阻塞检查，给 C / I 的发布决策用）。
+const contentMissing = levels
+  .filter((lv) => {
+    const u = allById.get(lv.code) ?? null;
+    if (!u || u.status === 'published') return false;
+    return !String(u.conclusion || '').trim() || stepCount(u) === 0 || mistakeCount(u) === 0;
+  })
+  .map((lv) => lv.code);
+console.log(
+  contentMissing.length
+    ? `     提示：${contentMissing.length} 关草稿内容仍不完整（${contentMissing.join(', ')}），发布前请先补内容，否则会出现空卡片。`
+    : '     草稿内容：L01–L30 的教学字段（结论 / 步骤 / 误区）均已补齐，C 可逐关审核发布。',
+);
+
 console.log(failed === 0 ? '\n全部检查通过。' : `\n有 ${failed} 项检查失败。`);
 process.exit(failed === 0 ? 0 : 1);
