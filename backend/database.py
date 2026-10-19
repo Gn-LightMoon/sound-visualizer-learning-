@@ -15,6 +15,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+import dataset  # 音乐学院数据集六张表(第 8 周 C)
+import tag_store  # 问题标签存储(CON-06 C 部分)
+
 DB_PATH = "pronunciation.db"
 
 
@@ -228,6 +231,8 @@ def init_db(db_path: str = "pronunciation.db") -> None:
             """
         )
         _ensure_cms_columns(conn)
+        dataset.init_schema(conn)   # 音乐学院数据集六张表(第 8 周 C,幂等)
+        tag_store.init_schema(conn)  # 问题标签存储(CON-06 C 部分,幂等)
         _seed_units(conn)
         _enrich_appendix_a_units(conn)
         _seed_admin(conn)

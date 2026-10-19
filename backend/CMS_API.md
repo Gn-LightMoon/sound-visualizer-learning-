@@ -59,6 +59,18 @@
 | POST | `/api/admin/units/{id}/set-detection` | 检测开关:body `{"verified":true/false}`;对应 CON-04「只学不测」 |
 | GET | `/api/admin/audit-logs?resource_id=&limit=` | 操作日志(倒序) |
 
+### 音乐学院数据集 `/api/admin/dataset`(第 8 周新增,全部需 X-Token)
+
+> 入库走 CLI:在 backend 目录执行 `python tools/import_dataset.py <交付目录> --batch-name ... --annotation-csv ... --recorder-csv ... --consent-dir ... [--dry-run]`(幂等,可反复补漏;CSV 模板在 tools/templates/)。本组接口只做浏览/核对。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/dataset/summary` | 六项计数(批次/样本/标注/录音人/同意书/错误码),汇报口径 |
+| GET | `/api/admin/dataset/batches` | 导入批次列表(倒序) |
+| GET | `/api/admin/dataset/batches/{id}/samples?limit=` | 某批次样本列表(不含音频) |
+| GET | `/api/admin/dataset/samples/{id}/annotations` | 某样本的标注行(训练标签以标注表为准) |
+| GET | `/api/admin/dataset/recorders` | 录音人登记列表 |
+
 > 另:`/api/admin/stats`、`/api/admin/learning-records`、`/api/admin/feedback*`(main.py 内)第 7 周起同样需要 X-Token。
 
 ### 单元返回结构新增字段(30 关正式口径,对应 seed_levels_30.py 的 FIELD MAPPING)

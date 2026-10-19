@@ -54,6 +54,7 @@ from audio_analyzer import (
 )
 from feedback_engine import build_four_step_feedback, compute_reliability
 import cms_routes
+import dataset_routes
 from cms_routes import require_admin
 
 app = FastAPI(title="看得见的声音 API", version="1.0.0")
@@ -73,6 +74,8 @@ database.init_db(database.DB_PATH)
 
 # CMS 管理接口（四状态机 / 下架 / 检测开关 / 操作日志，第 6 周 C）
 app.include_router(cms_routes.router)
+# 音乐学院数据集浏览接口（第 8 周 C，入库走 tools/import_dataset.py）
+app.include_router(dataset_routes.router)
 
 # CORS配置 - 允许所有本地开发端口
 app.add_middleware(
