@@ -79,7 +79,8 @@ function mapQuality(raw: any): RecordingQuality {
   }
 }
 
-function mapAssessment(data: any): PronunciationAssessment {  const audioRaw = data.audio_analysis
+function mapAssessment(data: any): PronunciationAssessment {
+  const audioRaw = data.audio_analysis
   const audioAnalysis: AudioAnalysisResult | null = audioRaw
     ? {
         f0: audioRaw.f0 || [],
@@ -104,6 +105,8 @@ function mapAssessment(data: any): PronunciationAssessment {  const audioRaw = d
           feedback: p.feedback,
         })),
         standardF0: audioRaw.standard_f0 || [],
+        // 逐帧时间戳：后端尚未提供（A 2026-10-11），先按约定占位，拿到即用（E 的第 7 周改动）
+        timestamps: audioRaw.timestamps || [],
       }
     : null
 
