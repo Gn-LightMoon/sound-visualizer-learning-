@@ -188,6 +188,12 @@ export interface CmsUnit {
   detectionOpen?: boolean
   reviewStatus?: string
   version?: number
+  /** 审核流转信息（C 第 7 周：创建人不能审核自己，发布/驳回都留痕） */
+  creator?: string | null
+  submitReviewTime?: string | null
+  reviewTime?: string | null
+  reviewer?: string | null
+  reviewComment?: string | null
 }
 
 export interface UserFeedbackItem {

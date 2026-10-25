@@ -30,10 +30,11 @@ if any(m in _pythonpath.lower() for m in _shim_markers):
     parts = [p for p in _pythonpath.split(os.pathsep) if p and not any(m in p.lower() for m in _shim_markers)]
     os.environ["PYTHONPATH"] = os.pathsep.join(parts)
 
-from fastapi import FastAPI, Header, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, Header, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import librosa
 import torch
 
@@ -53,8 +54,19 @@ from audio_analyzer import (
 )
 from feedback_engine import build_four_step_feedback, compute_reliability
 import cms_routes
+import dataset_routes
+from cms_routes import require_admin
 
 app = FastAPI(title="看得见的声音 API", version="1.0.0")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException):
+    """统一 HTTP 错误格式：{"code": status, "message": detail}（仓库约定，含 401 未登录）"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.status_code, "message": str(exc.detail)},
+    )
 
 # 启动时初始化 SQLite 数据库（幂等建表）
 # 用 database.DB_PATH 而非写死默认值，便于测试脚本先指向临时库
@@ -62,6 +74,8 @@ database.init_db(database.DB_PATH)
 
 # CMS 管理接口（四状态机 / 下架 / 检测开关 / 操作日志，第 6 周 C）
 app.include_router(cms_routes.router)
+# 音乐学院数据集浏览接口（第 8 周 C，入库走 tools/import_dataset.py）
+app.include_router(dataset_routes.router)
 
 # CORS配置 - 允许所有本地开发端口
 app.add_middleware(
@@ -591,14 +605,14 @@ async def get_record_audio(record_id: str):
     return Response(content=blob, media_type=mime)
 
 @app.get("/api/admin/learning-records")
-async def admin_learning_records(limit: int = 100):
-    """后台管理：获取全部用户的学习记录（不含 BLOB）"""
+async def admin_learning_records(limit: int = 100, operator: str = Depends(require_admin)):
+    """后台管理：获取全部用户的学习记录（不含 BLOB，第 7 周起需管理员登录）"""
     records = database.get_all_learning_records(limit)
     return {"code": 200, "data": records}
 
 @app.get("/api/admin/stats")
-async def admin_stats():
-    """后台管理：全量统计卡片数据（SQL 聚合）"""
+async def admin_stats(operator: str = Depends(require_admin)):
+    """后台管理：全量统计卡片数据（SQL 聚合，第 7 周起需管理员登录）"""
     stats = database.get_stats()
     return {"code": 200, "data": stats}
 
@@ -667,15 +681,15 @@ async def submit_feedback(payload: dict):
 
 
 @app.get("/api/admin/feedback")
-async def admin_feedback(status: str = ""):
-    """后台：反馈处理列表（支持按状态过滤）"""
+async def admin_feedback(status: str = "", operator: str = Depends(require_admin)):
+    """后台：反馈处理列表（支持按状态过滤，第 7 周起需管理员登录）"""
     items = database.get_feedbacks(status)
     return {"code": 200, "data": items}
 
 
 @app.put("/api/admin/feedback/{fb_id}")
-async def handle_feedback(fb_id: str, payload: dict):
-    """后台：更新反馈处理状态（pending/adopted/rejected + 处理说明）"""
+async def handle_feedback(fb_id: str, payload: dict, operator: str = Depends(require_admin)):
+    """后台：更新反馈处理状态（pending/adopted/rejected + 处理说明，第 7 周起需管理员登录）"""
     status = payload.get("status", "pending")
     note = payload.get("handleNote", "")
     ok = database.update_feedback_status(fb_id, status, note)

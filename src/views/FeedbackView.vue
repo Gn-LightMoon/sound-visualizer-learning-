@@ -1262,6 +1262,18 @@ watch(
       </div>
     </div>
 
+    <!-- 服务端未加载 ASR 模型时如实说明：没有音素块不等于"页面没做完"（第 7 周 D 补，E 的版本没有） -->
+    <el-alert
+      v-if="assessment?.evaluable && assessment?.audioAnalysis
+        && !assessment?.audioAnalysis?.phonemes?.length && !assessment?.audioAnalysis?.recognizedText"
+      class="phoneme-unavailable"
+      type="info"
+      show-icon
+      :closable="false"
+      title="本次结果不含音素级分析（服务端未加载语音识别模型）"
+      description="声调曲线、共振峰、能量与上方四步反馈都来自声学分析，结论不受影响。需要音素级对比时，请在服务端加载 ASR 模型（POST /api/asr/load）后再录一次。"
+    />
+
     <!-- 声调曲线 + 3D动画（仅可评价时展示） -->
     <div v-if="assessment?.evaluable && assessment?.audioAnalysis" class="analysis-row">
       <div class="chart-card">
@@ -1358,7 +1370,11 @@ watch(
 .reliability-note { font-size: 13px; color: #606266; margin-top: 8px; }
 .quality-list { margin-top: 16px; }
 .quality-item { font-size: 13px; padding: 6px 0; }
+/* 后端质量项状态 pass/warn/fail → 前端 ok/warn/fail（mapQuality 归一），按状态上色 */
+.quality-item.ok { color: #606266; }
+.quality-item.warn { color: #e6a23c; }
 .quality-item.fail { color: #f56c6c; }
+.phoneme-unavailable { margin-top: 4px; }
 .four-step h3 { margin: 0 0 12px; }
 .step-item { padding: 12px; margin-bottom: 8px; border-radius: 8px; background: #f5f7fa; font-size: 13px; }
 .step-item.error { background: #fef0f0; }

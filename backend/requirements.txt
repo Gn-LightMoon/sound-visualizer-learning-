@@ -1,5 +1,8 @@
 fastapi==0.104.1
 uvicorn==0.24.0
+# 自测/回归依赖（第 7 周 C：test_cms_workflow.py 已 pytest 化，httpx 供 HTTP 级鉴权测试）
+pytest>=8.0
+httpx>=0.27
 python-multipart==0.0.6
 librosa==0.10.2.post1
 numpy==1.24.3

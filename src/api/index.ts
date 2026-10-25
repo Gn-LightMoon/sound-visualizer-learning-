@@ -15,6 +15,35 @@ import type {
 // API基础配置
 const API_BASE_URL = 'http://localhost:8000/api'
 
+/**
+ * 管理员登录态（C 第 7 周给 /api/admin/* 加了 X-Token 鉴权）
+ * ---------------------------------------------------------------------------
+ * 前端只存 token（localStorage），所有请求在 request() 里自动带上 X-Token。
+ * 401 由页面兜底：清 token、回到登录卡片，不把"未登录"伪装成"接口异常"。
+ */
+const ADMIN_TOKEN_KEY = 'voice_admin_token'
+let adminToken = ''
+
+try {
+  adminToken = localStorage.getItem(ADMIN_TOKEN_KEY) ?? ''
+} catch {
+  adminToken = ''
+}
+
+export function getAdminToken(): string {
+  return adminToken
+}
+
+export function setAdminToken(token: string | null): void {
+  adminToken = token ?? ''
+  try {
+    if (adminToken) localStorage.setItem(ADMIN_TOKEN_KEY, adminToken)
+    else localStorage.removeItem(ADMIN_TOKEN_KEY)
+  } catch {
+    /* 隐私模式下写不了 localStorage，内存里的 token 仍可用 */
+  }
+}
+
 // 通用请求函数
 async function request<T>(
   url: string,
@@ -25,12 +54,18 @@ async function request<T>(
     headers: {
       // FormData 时不设置 Content-Type，让浏览器自动带上 boundary
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      // 后台接口鉴权：没登录时为空，后端会回 401
+      ...(adminToken ? { 'X-Token': adminToken } : {}),
       ...options.headers,
     },
     ...options,
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      // token 失效：清掉本地登录态，让后台页回到登录卡片
+      setAdminToken(null)
+    }
     throw new Error(`HTTP error! status: ${response.status}`)
   }
 
@@ -177,6 +212,74 @@ export const adminApi = {
       method: 'PUT',
       body: JSON.stringify({ status, handleNote }),
     })
+  },
+}
+
+// 管理员登录（C 第 7 周：/api/admin/login 返回 token，后续接口带 X-Token）
+export const adminAuthApi = {
+  login(username: string, password: string): Promise<ApiResponse<{ token: string; username: string; displayName: string }>> {
+    return request('/admin/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  },
+
+  logout(): Promise<ApiResponse<void>> {
+    return request('/admin/logout', { method: 'POST' })
+  },
+
+  /** 登录态自检：拿一个需要鉴权的接口探一下，401 会被 request() 清 token */
+  check(): Promise<ApiResponse<CmsUnit[]>> {
+    return request('/admin/units')
+  },
+}
+
+// CMS 审核流转（C 第 7/8 周：四状态机 + 版本快照 + 操作日志）
+export const cmsApi = {
+  /** 管理员视角的单元列表（全状态可见，可按 draft/pending_review/rejected/published 过滤） */
+  units(status = ''): Promise<ApiResponse<CmsUnit[]>> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : ''
+    return request(`/admin/units${q}`)
+  },
+
+  getUnit(id: string): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}`)
+  },
+
+  /** 版本历史快照 */
+  versions(id: string): Promise<ApiResponse<any[]>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/versions`)
+  },
+
+  submitReview(id: string): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/submit-review`, { method: 'POST' })
+  },
+
+  approve(id: string): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/approve`, { method: 'POST' })
+  },
+
+  reject(id: string, comment: string): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ review_comment: comment }),
+    })
+  },
+
+  unpublish(id: string): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/unpublish`, { method: 'POST' })
+  },
+
+  /** 检测开关：verified=true 表示该关可开放检测（不能稳定评分的关只学不测） */
+  setDetection(id: string, verified: boolean): Promise<ApiResponse<CmsUnit>> {
+    return request(`/admin/units/${encodeURIComponent(id)}/set-detection`, {
+      method: 'POST',
+      body: JSON.stringify({ verified }),
+    })
+  },
+
+  auditLogs(resourceId = '', limit = 100): Promise<ApiResponse<any[]>> {
+    const params = new URLSearchParams()
+    if (resourceId) params.set('resource_id', resourceId)
+    params.set('limit', String(limit))
+    return request(`/admin/audit-logs?${params.toString()}`)
   },
 }
 
