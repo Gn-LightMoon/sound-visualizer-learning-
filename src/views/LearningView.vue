@@ -90,11 +90,38 @@ const detectionHint = computed(() =>
 /** 未开放的关不渲染示范入口与教学卡片：内容还没过审，不拿占位内容充数（第 8 周 D） */
 const showLevelBody = computed(() => level.value?.availability !== 'unopened')
 
+/**
+ * 「只看能练的」开关（第 8 周收口）
+ * 30 关里目前只有 4 关能练，默认铺满灰卡片会让孩子找不到入口；
+ * 开关打开只留可练可测的关，并给一个直接跳到第 1 关可练的按钮。
+ */
+const onlyOpen = ref(false)
+const visibleGroups = computed(() =>
+  onlyOpen.value
+    ? levelsStore.levelGroups.map(g => ({ ...g, items: g.items.filter(l => l.availability === 'open') }))
+    : levelsStore.levelGroups,
+)
+
+function goFirstOpen() {
+  const first = levelsStore.levels.find(l => l.availability === 'open')
+  if (first) openLevel(first.code)
+}
+
 function availabilityTag(l: { availability: string }): 'success' | 'warning' | 'info' {
   if (l.availability === 'open') return 'success'
   if (l.availability === 'learn_only') return 'warning'
   return 'info'
 }
+
+/** 列表卡片上的短标签（第 8 周收口：手机两列时「可以练习 + 可以检测」会顶出卡片） */
+function availabilityShort(l: { availability: string }): string {
+  if (l.availability === 'open') return '可练可测'
+  if (l.availability === 'learn_only') return '只学不测'
+  return '未开放'
+}
+
+/** 已发布的关：未开放的关页里用它给出「先练这几关」，不摆空白页 */
+const openLevels = computed(() => levelsStore.levels.filter(l => l.availability === 'open'))
 
 function openLevel(code: string) {
   router.push(`/learn/${code}`)
@@ -280,6 +307,21 @@ async function analyzeAndGoFeedback() {
         :title="copy.unopened"
         description="本关的内容还没通过审核发布，按 SRS 收缩规则记「未开放」：可以先练前面已经开放的关卡。"
       />
+      <!-- 未开放不代表页面只能空着：把「现在能练的关」直接列出来（第 8 周收口） -->
+      <div v-if="level.availability === 'unopened' && openLevels.length" class="card block open-suggest">
+        <h3>先练这几关（已经开放）</h3>
+        <div class="open-chips">
+          <el-button
+            v-for="l in openLevels"
+            :key="l.code"
+            size="small"
+            @click="openLevel(l.code)"
+          >
+            {{ l.code }} {{ l.target }} · {{ l.unit?.character || l.char }}
+          </el-button>
+        </div>
+        <p class="block-text muted">本关通过审核后会在这里出现；现在先把能练的音读稳。</p>
+      </div>
       <el-alert
         v-else-if="level.availability === 'learn_only'"
         class="card"
@@ -413,9 +455,28 @@ async function analyzeAndGoFeedback() {
           未开放 {{ levelsStore.unopenedCount }}
         </p>
       </div>
-      <el-button :icon="'Refresh'" :loading="levelsStore.loading" @click="levelsStore.fetchLevels(true)">
-        刷新关卡
-      </el-button>
+      <div class="levels-header-actions">
+        <!-- 第 8 周收口：30 关里有 26 关还没发布，默认铺满整片灰卡片，
+             孩子不好找到"现在能练的"。给一个开关 + 一键跳到第一关可练的。 -->
+        <el-switch
+          v-model="onlyOpen"
+          size="small"
+          active-text="只看能练的"
+          :disabled="!levelsStore.openedCount"
+        />
+        <el-button
+          v-if="levelsStore.openedCount"
+          type="primary"
+          plain
+          :icon="'VideoPlay'"
+          @click="goFirstOpen"
+        >
+          从能练的第 1 关开始
+        </el-button>
+        <el-button :icon="'Refresh'" :loading="levelsStore.loading" @click="levelsStore.fetchLevels(true)">
+          刷新关卡
+        </el-button>
+      </div>
     </div>
 
     <PageState
@@ -433,7 +494,12 @@ async function analyzeAndGoFeedback() {
       :copy="copy"
     />
 
-    <template v-for="group in levelsStore.levelGroups" :key="group.key">
+    <!-- 只看能练的：滤空时说明原因，不摆空白区 -->
+    <p v-else-if="onlyOpen && !visibleGroups.some(g => g.items.length)" class="levels-hint">
+      现在还没有开放检测的关；等老师发布后这里就会出现。
+    </p>
+
+    <template v-for="group in visibleGroups" :key="group.key">
       <div v-if="group.items.length" class="group-block">
         <div class="group-title">
           <span>{{ group.label }}</span>
@@ -449,7 +515,7 @@ async function analyzeAndGoFeedback() {
           >
             <div class="level-card-top">
               <span class="level-card-code">{{ l.code }}</span>
-              <el-tag size="small" :type="availabilityTag(l)" effect="light">{{ availabilityText(l) }}</el-tag>
+              <el-tag size="small" :type="availabilityTag(l)" effect="light">{{ availabilityShort(l) }}</el-tag>
             </div>
             <div class="level-card-target">{{ l.target }}</div>
             <div class="level-card-char">{{ l.unit?.character || l.char }}</div>
@@ -494,6 +560,7 @@ async function analyzeAndGoFeedback() {
 .demo-source { margin: 8px 2px 0; }
 .demo-source.is-real { color: #67c23a; }
 .level-nav { display: flex; justify-content: space-between; margin-top: 16px; }
+.open-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 
 /* ---- 步骤 / 误区 ---- */
 .step-list, .mistake-list { display: flex; flex-direction: column; gap: 10px; }
@@ -515,7 +582,9 @@ async function analyzeAndGoFeedback() {
 .record-error { margin-top: 12px; text-align: left; }
 
 /* ---- 列表 ---- */
-.levels-header { display: flex; justify-content: space-between; align-items: center; }
+.levels-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.levels-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.levels-hint { margin: 4px 0 0; font-size: 13px; color: #909399; }
 .levels-header h2 { margin: 0; font-size: 18px; color: #303133; }
 .levels-meta { margin: 6px 0 0; font-size: 13px; color: #909399; }
 .group-block { margin-top: 20px; }
