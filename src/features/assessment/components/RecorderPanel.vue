@@ -26,6 +26,8 @@ const props = defineProps<{
   error: FlowError | null
   busy: boolean
   recorderError: string | null
+  /** 是否已登录：录音与结果都要落账号，未登录时入口直接改为「登录后录音」 */
+  authenticated: boolean
   /** 实时反馈主视图：声母关看包络，其余看音高轨迹（FR-907 按关卡聚焦） */
   focus?: 'pitch' | 'onset'
   /** 本关目标调型（可推导时），画五度刻度 */
@@ -36,6 +38,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'begin'): void
+  (e: 'login'): void
   (e: 'retry-mic'): void
   (e: 'start'): void
   (e: 'stop'): void
@@ -78,11 +81,23 @@ const progressPercent = () => Math.min(100, (props.elapsedMs / maxMs) * 100)
         color="red-8"
         class="record-btn primary"
         :disable="state === 'mic-request'"
-        @click="emit('begin')"
+        @click="authenticated ? emit('begin') : emit('login')"
       >
-        {{ state === 'mic-request' ? '正在开启麦克风…' : '开始录音' }}
+        {{ state === 'mic-request' ? '正在开启麦克风…' : authenticated ? '开始录音' : '登录后录音' }}
       </QBtn>
+      <p v-if="!authenticated" class="auth-hint">录音与检测结果会存到你的账号里，先登录再开始。</p>
       <RecordingTips />
+    </div>
+
+    <!-- 未登录 / 会话过期：录音入口改为登录引导（登录后回跳本关重新录） -->
+    <div v-else-if="state === 'auth-required'" class="failed-box auth-box">
+      <p class="state-note">录音检测需要登录</p>
+      <p class="state-sub">
+        录音、检测结果与声音档案都保存在账号里。登录后会回到本关，重新录一遍即可提交。
+      </p>
+      <div class="panel-row">
+        <QBtn unelevated no-caps rounded color="red-8" class="record-btn primary" @click="emit('login')">去登录</QBtn>
+      </div>
     </div>
 
     <!-- 麦克风被拒 -->
@@ -275,4 +290,14 @@ const progressPercent = () => Math.min(100, (props.elapsedMs / maxMs) * 100)
   color: #c62828
   font-size: 13px
   margin: 0
+
+.auth-hint
+  margin: 0
+  font-size: 13px
+  color: #78909c
+  text-align: center
+
+.auth-box
+  border-color: #b2dfdb
+  background: #f4fbfa
 </style>

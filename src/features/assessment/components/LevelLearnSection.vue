@@ -48,6 +48,12 @@ function onReRecord() {
 
 const calibrating = computed(() => flow.state.value === 'calibrating')
 
+/**
+ * 录音入口的登录判定：/api/me/context 返回前先按「可录音」渲染，
+ * 避免已登录用户在第一帧看到「登录后录音」；真正未登录的点击会被流程拦到登录引导。
+ */
+const canRecord = computed(() => !contextStore.loaded || contextStore.isAuthenticated)
+
 /** 实时反馈主视图按关卡层聚焦：声母关看送气/摩擦包络，其余看音高轨迹（FR-907） */
 const realtimeFocus = computed<'pitch' | 'onset'>(() => (props.level.layer === 'initial' ? 'onset' : 'pitch'))
 /** 目标调型：从关卡 pinyin 声调符号推导，推不出则不画五度刻度 */
@@ -111,10 +117,12 @@ onBeforeUnmount(() => recorder.release())
           :error="flow.flowError.value"
           :busy="flow.busy.value"
           :recorder-error="recorder.error"
+          :authenticated="canRecord"
           :focus="realtimeFocus"
           :target-tone="realtimeTargetTone"
           :range-hz="realtimeRangeHz"
           @begin="beginRecording"
+          @login="flow.goLogin"
           @retry-mic="flow.requestMic"
           @start="startRecording"
           @stop="flow.stopRecording"

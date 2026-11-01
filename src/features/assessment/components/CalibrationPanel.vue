@@ -37,8 +37,10 @@ const authFailed = computed(() => {
 })
 
 function gotoLogin() {
+  // 带上当前路径，登录成功后回到原关卡（否则落到 /account，标定上下文丢失）
+  const redirect = router.currentRoute.value.fullPath
   emit('dismiss')
-  void router.push('/account/login')
+  void router.push({ path: '/account/login', query: { redirect } })
 }
 
 onMounted(() => {
@@ -179,7 +181,9 @@ async function submit() {
         </div>
 
         <footer class="cal-foot">
+          <!-- 未登录时不再提供「跳过标定，直接录音」：跳过去录完也提交不了（上传要求登录） -->
           <QBtn
+            v-if="!authFailed"
             flat
             no-caps
             color="grey-6"
