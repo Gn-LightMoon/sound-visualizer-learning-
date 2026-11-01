@@ -25,9 +25,10 @@ function submit() {
       placeholder="请输入拼音"
       aria-label="搜索关卡"
       enterkeyhint="search"
+      @keyup.enter="submit"
     >
       <template #append>
-        <QBtn type="submit" unelevated color="primary" icon="search" aria-label="搜索" />
+        <QBtn type="submit" unelevated color="primary" icon="search" aria-label="搜索" @click="submit" />
       </template>
     </QInput>
   </form>
