@@ -436,8 +436,11 @@ onMounted(() => {
   top: 16px
 
 @media (max-width: 1080px)
+  // 列向下 flex-start 会让每个子项按 fit-content 撑宽，矩阵表格把整页顶到 1200px；
+  // 触屏宽度下改为 stretch，横向滚动交给 .im-scroll
   .lib-main
     flex-direction: column
+    align-items: stretch
   .lib-side
     position: static
     width: 100%
