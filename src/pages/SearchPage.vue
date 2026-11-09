@@ -11,6 +11,7 @@ import LevelCard from '@/components/LevelCard.vue'
 import SearchBox from '@/components/SearchBox.vue'
 import WishDialog from '@/components/WishDialog.vue'
 import PageState from '@/components/PageState.vue'
+import PageHead from '@/components/ui/PageHead.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -63,7 +64,7 @@ function onSearch(term: string) {
 
 <template>
   <div class="search-page">
-    <h1>搜一个音</h1>
+    <PageHead title="搜一个音" icon="search" desc="用汉字、拼音或关卡名找到一关；没收录的音可以提交「希望增加」。" />
     <SearchBox :model-value="queryInput" @search="onSearch" />
 
     <PageState v-if="loading" state="loading" />
@@ -106,23 +107,22 @@ function onSearch(term: string) {
   flex-direction: column
   gap: 20px
 
-  h1
-    font-size: 24px
-    margin: 0
-
 .result-section h2
-  font-size: 17px
+  font-size: 20px
+  font-weight: 800
+  letter-spacing: -0.3px
   margin: 0 0 12px
 
 .result-grid
   display: grid
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))
-  gap: 14px
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr))
+  gap: 16px
 
 .no-hit-hint, .no-suggestion, .empty-hint
-  color: #78909c
+  color: var(--vs-mute)
   font-size: 14px
 
 .wish-open
   margin-top: 14px
+  border-radius: 8px
 </style>

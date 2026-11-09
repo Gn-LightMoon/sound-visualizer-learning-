@@ -76,7 +76,7 @@ const grouped = computed(() => ({
           :class="{ active: isPlaying(item), slow: item.speed === 'slow' }"
           no-caps
           color="primary"
-          :text-color="isPlaying(item) ? 'white' : 'teal-9'"
+          :text-color="isPlaying(item) ? 'white' : 'primary'"
           size="13px"
           :unelevated="isPlaying(item)"
           :outline="!isPlaying(item)"
@@ -119,9 +119,9 @@ const grouped = computed(() => ({
 .demo-btn
   min-height: 32px
   &.q-btn--outline
-    background: #e0f2f1 !important
+    background: var(--vs-soft) !important
     &:hover
-      background: #b2dfdb !important
+      background: var(--vs-brand-line) !important
   &.slow:before
     border-style: dashed
 
@@ -130,16 +130,16 @@ const grouped = computed(() => ({
   line-height: 1
   padding: 2px 4px
   border-radius: 4px
-  background: rgba(0, 137, 123, 0.12)
+  background: rgba(var(--vs-brand-rgb), 0.12)
   .demo-btn.active &
     background: rgba(255, 255, 255, 0.25)
 
 .demo-error
   font-size: 13px
-  color: #c62828
+  color: var(--vs-brand-d)
   margin: 0
 
 .demo-empty
-  color: #90a4ae
+  color: var(--vs-mute)
   font-size: 14px
 </style>

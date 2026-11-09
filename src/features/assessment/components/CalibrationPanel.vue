@@ -108,7 +108,7 @@ async function submit() {
           <div v-if="calibration.failAdvice.value" class="cal-fail">
             <p class="cal-fail-title">这次标定没有成功</p>
             <p>{{ calibration.failAdvice.value }}</p>
-            <QBtn outline no-caps color="blue-grey-4" text-color="blue-grey-9" class="cal-btn" label="再试一次" @click="calibration.startRecording()" />
+            <QBtn outline no-caps color="primary" text-color="primary" class="cal-btn" label="再试一次" @click="calibration.startRecording()" />
           </div>
 
           <div v-else-if="calibration.phase.value === 'intro'" class="cal-actions">
@@ -125,7 +125,7 @@ async function submit() {
           <div v-else-if="calibration.phase.value === 'recording'" class="cal-recording">
             <p class="cal-recording-hint">录音中…读完后点「停止」（最长 40 秒）</p>
             <span class="cal-timer">{{ (calibration.recorder.elapsedMs / 1000).toFixed(1) }}s</span>
-            <QBtn unelevated no-caps color="blue-grey-8" class="cal-btn stop" label="■ 停止" @click="calibration.recorder.stop()" />
+            <QBtn unelevated no-caps color="primary" class="cal-btn stop" label="■ 停止" @click="calibration.recorder.stop()" />
           </div>
 
           <div
@@ -136,8 +136,8 @@ async function submit() {
               v-if="calibration.recorder.blobUrl"
               outline
               no-caps
-              color="blue-grey-4"
-              text-color="blue-grey-9"
+              color="primary"
+              text-color="primary"
               class="cal-btn"
               :label="player.isCurrent('cal-preview') ? '⏸ 暂停试听' : '▶ 试听'"
               @click="player.play({ key: 'cal-preview', url: calibration.recorder.blobUrl! })"
@@ -145,8 +145,8 @@ async function submit() {
             <QBtn
               outline
               no-caps
-              color="blue-grey-4"
-              text-color="blue-grey-9"
+              color="primary"
+              text-color="primary"
               class="cal-btn"
               label="重录"
               :disable="calibration.busy.value"
@@ -176,8 +176,8 @@ async function submit() {
         <div v-if="calibration.phase.value === 'failed' && calibration.error.value" class="cal-fail">
           <p class="cal-fail-title">{{ errorCopy(calibration.error.value).title }}</p>
           <p>{{ errorCopy(calibration.error.value).hint }}</p>
-          <QBtn v-if="authFailed" outline no-caps color="blue-grey-4" text-color="blue-grey-9" class="cal-btn" label="去登录" @click="gotoLogin" />
-          <QBtn v-else outline no-caps color="blue-grey-4" text-color="blue-grey-9" class="cal-btn" label="重试" @click="calibration.loadText()" />
+          <QBtn v-if="authFailed" outline no-caps color="primary" text-color="primary" class="cal-btn" label="去登录" @click="gotoLogin" />
+          <QBtn v-else outline no-caps color="primary" text-color="primary" class="cal-btn" label="重试" @click="calibration.loadText()" />
         </div>
 
         <footer class="cal-foot">
@@ -186,7 +186,7 @@ async function submit() {
             v-if="!authFailed"
             flat
             no-caps
-            color="grey-6"
+            color="grey-5"
             :label="calibration.phase.value === 'success' ? '关闭' : '跳过标定，直接录音'"
             @click="emit('cancel')"
           />
@@ -218,34 +218,34 @@ async function submit() {
   p
     margin: 0
     font-size: 13px
-    color: #78909c
+    color: var(--vs-mute)
 
 .cal-close
   flex-shrink: 0
 
 .cal-loading
-  color: #90a4ae
+  color: var(--vs-mute)
   text-align: center
 
 .cal-text
-  background: #e0f2f1
+  background: var(--vs-soft)
   border-radius: 10px
   padding: 14px
   h3
     margin: 0 0 8px
     font-size: 15px
-    color: #00695c
+    color: var(--vs-coffee)
 
 .cal-passage
   font-size: 18px
   line-height: 2
   margin: 0 0 8px
-  color: #004d40
+  color: var(--vs-ink)
 
 .cal-note
   margin: 0
   font-size: 13px
-  color: #00796b
+  color: var(--vs-coffee-d)
 
 .cal-actions, .cal-recorded, .cal-recording
   display: flex
@@ -255,7 +255,7 @@ async function submit() {
   flex-wrap: wrap
 
 /* 原 .cal-btn 胶囊基础尺寸（48px 触达 / 110px 最小宽 / 15px 字号）；
-   .primary 实底青（#00897b）字重 700 同原版 .cal-btn.primary */
+   .primary 实底青（var(--vs-brand)）字重 700 同原版 .cal-btn.primary */
 .cal-btn
   min-height: 48px
   min-width: 110px
@@ -268,18 +268,18 @@ async function submit() {
 
 .cal-recording-hint
   margin: 0
-  color: #d32f2f
+  color: var(--vs-brand)
   font-size: 14px
 
 .cal-timer
   font-variant-numeric: tabular-nums
   font-size: 24px
   font-weight: 700
-  color: #d32f2f
+  color: var(--vs-brand)
 
 .cal-fail
-  background: #fff3e0
-  border: 1px solid #ffb74d
+  background: var(--vs-amber-soft)
+  border: 1px solid var(--vs-sand)
   border-radius: 10px
   padding: 12px 16px
   display: flex
@@ -289,15 +289,15 @@ async function submit() {
   p
     margin: 0
     font-size: 14px
-    color: #5d4037
+    color: var(--vs-ink2)
 
 .cal-fail-title
   font-weight: 700
-  color: #bf360c
+  color: var(--vs-brand-d)
 
 .cal-success
-  background: #e8f5e9
-  border: 1px solid #a5d6a7
+  background: var(--vs-green-soft)
+  border: 1px solid var(--vs-green-line)
   border-radius: 10px
   padding: 16px
   display: flex
@@ -306,7 +306,7 @@ async function submit() {
   align-items: flex-start
   p
     margin: 0
-    color: #1b5e20
+    color: var(--vs-green-d)
 
 .cal-foot
   text-align: center

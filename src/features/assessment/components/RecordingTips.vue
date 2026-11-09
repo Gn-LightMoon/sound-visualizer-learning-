@@ -10,5 +10,5 @@
 .recording-tip
   margin: 0
   font-size: 12px
-  color: #90a4ae
+  color: var(--vs-mute)
 </style>

@@ -47,7 +47,7 @@ const topOffsetPx = ref(0)
 const headerHeightPx = ref(0)
 
 function readOffsets() {
-  const appTopBar = document.querySelector('.app-shell > .mobile-bar')
+  const appTopBar = document.querySelector('.app-shell > .topbar')
   const barH = appTopBar ? appTopBar.getBoundingClientRect().height : 0
   topOffsetPx.value = barH > 0 ? Math.round(barH) : 0
   headerHeightPx.value = headerEl.value
@@ -80,13 +80,15 @@ onBeforeUnmount(() => {
 
 <template>
   <article class="level-view" :style="cssVars">
-    <!-- 关卡头部：标题 + 拼音 + IPA 徽章；冻结于页面顶部，滚动可见 -->
+    <!-- 关卡头部：类型 / 拼音 / IPA；冻结于页面顶部，滚动可见 -->
     <header ref="headerEl" class="level-header">
       <div class="level-identity">
+        <span class="vs-tag">{{ level.type }}</span>
         <h1>{{ level.title }}</h1>
         <span class="level-pinyin">{{ level.pinyin }}</span>
         <span v-if="phonology.ipa" class="ipa-badge">[{{ phonology.ipa }}]</span>
       </div>
+      <p class="level-sub">{{ level.detection ? '这一关已经开放录音，录完可以看分数与声学曲线' : '这一关目前只跟读，还不能评分' }}</p>
     </header>
 
     <aside class="level-aside">
@@ -157,20 +159,21 @@ onBeforeUnmount(() => {
 .sec-result
   order: 5
 
-/* 头部冻结：贴着页面顶部（手机端让位于 AppShell 顶栏），滚动时常驻可见。
-   整体压紧：标题行与标签行紧贴，与主体内容的间距尽量小。 */
+/* 头部冻结：贴着页面顶部（顶栏下方），滚动时常驻可见；底色与页面一致 + 模糊，卡片从下方穿过 */
 .level-header
   position: sticky
   top: var(--lv-top, 0px)
   z-index: 50
-  background: #f7f9fa
+  background: rgba(var(--vs-bg-rgb), 0.92)
+  -webkit-backdrop-filter: blur(10px)
+  backdrop-filter: blur(10px)
   margin-bottom: 10px
-  padding: 4px 0 8px
-  border-bottom: 1px solid #eceff1
+  padding: 10px 0 10px
+  border-bottom: 1px solid var(--vs-line2)
 
 .level-identity
   display: flex
-  align-items: baseline
+  align-items: center
   gap: 8px
   flex-wrap: wrap
 
@@ -178,27 +181,58 @@ onBeforeUnmount(() => {
   font-size: 21px
   margin: 0
   line-height: 1.25
+  font-weight: 900
+
+.level-sub
+  margin: 4px 0 0
+  font-size: 12.5px
+  color: var(--vs-sub)
 
 .level-pinyin
-  color: #607d8b
+  color: var(--vs-ink2)
   font-size: 15px
 
 .ipa-badge
   font-size: 15px
-  color: #00695c
-  background: #e0f2f1
-  border: 1px solid #b2dfdb
+  color: var(--vs-coffee)
+  background: var(--vs-soft)
+  border: 1px solid var(--vs-brand-line)
   border-radius: 6px
   padding: 0 6px
+  font-family: var(--font-ipa)
 
-/* 小标题：与全局各页一致（18px 粗体、无装饰竖线） */
+/* 每个模块一张卡：内容区留白与边框统一 */
 .level-section
-  margin-top: 26px
+  margin-top: 16px
+  background: var(--vs-card)
+  border: 1px solid var(--vs-line)
+  border-radius: 8px
+  padding: 24px
+  box-shadow: var(--vs-sh-1)
   h2
-    font-size: 18px
-    font-weight: 700
-    color: #263238
-    margin: 0 0 10px
+    font-size: 20px
+    font-weight: 900
+    letter-spacing: -0.3px
+    color: var(--vs-ink)
+    margin: 0 0 12px
+    display: flex
+    align-items: center
+    gap: 8px
+  h2::before
+    content: ''
+    display: block
+    flex: none
+    width: 4px
+    height: 18px
+    border-radius: 2px
+    background: linear-gradient(180deg, var(--vs-sand), var(--vs-brand))
+
+/* 构形自带卡片外观，不再套一层 */
+.sec-figure
+  background: transparent
+  border: none
+  box-shadow: none
+  padding: 0
 
 /* 每栏首个内容模块紧贴标题栏，不吃 section 的上边距 */
 .level-aside .level-section:first-child,
